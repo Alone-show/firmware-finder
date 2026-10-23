@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Firmware Finder",
+    "description": "Locate production firmware for a device model in the Teambition release board's archived fields, with flash and OTA links."
+  }
+}

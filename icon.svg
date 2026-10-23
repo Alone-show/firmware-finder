@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Firmware finder">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#1f6feb"/>
+  <g fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="16" y="16" width="24" height="24" rx="4"/>
+    <path d="M22 22h12v12H22z" opacity=".55"/>
+    <path d="M24 16v-4M32 16v-4M24 44v4M32 44v4M16 24h-4M16 32h-4M44 24h4M44 32h4"/>
+    <circle cx="44" cy="42" r="7"/>
+    <path d="M49 47l6 6"/>
+  </g>
+</svg>

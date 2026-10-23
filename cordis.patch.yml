@@ -1,0 +1,3 @@
+- insert:
+    - id: firmware-finder
+      name: '@local/firmware-finder'
