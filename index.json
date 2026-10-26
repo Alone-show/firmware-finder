@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "title": {
+    "en": "Alone-show plugins",
+    "zh": "Alone-show 插件"
+  },
+  "description": {
+    "en": "Personal DSH plugins.",
+    "zh": "个人 DSH 插件集合。"
+  },
+  "metadata": {
+    "categories": {},
+    "labels": {},
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "@local/firmware-finder",
+      "title": {
+        "en": "Firmware Finder",
+        "zh": "固件检索"
+      },
+      "description": {
+        "en": "Find production firmware by device model and OS from the Teambition release board's archived fields.",
+        "zh": "按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链。"
+      },
+      "icon": "icon.svg",
+      "author": "Alone-show",
+      "homepage": "https://github.com/Alone-show/firmware-finder",
+      "repository": {
+        "url": "https://github.com/Alone-show/firmware-finder"
+      },
+      "metadata": {
+        "keywords": [
+          "firmware",
+          "teambition",
+          "android",
+          "release"
+        ],
+        "labels": []
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1793000322,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Alone-show/firmware-finder",
+            "commit": "9332b3547e7b29d29f3f2040f81bb79662de4517"
+          },
+          "engines": {}
+        }
+      ]
+    }
+  ]
+}
