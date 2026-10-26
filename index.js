@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { commandDefinition } from './command.js';
 import { checkToken, ensureToken, loginWithCookie, discoverBrowsers, tokenFile } from './login.js';
 
 const PROJECT_ID = '65a8da81950780b816d12bd9'; // 【研发部】CI/CD 发版流程
@@ -739,6 +740,60 @@ function modelsToolFor(ctx) {
   };
 }
 
+/**
+ * 同步看板索引：凭据缺失/即将过期/被 401 拒绝时自动登录后重试一次。
+ * `/cpfirmware sync` 与 `firmware_sync` 工具共用这段逻辑。
+ */
+async function syncNow(ctx, exec) {
+  const dir = await tokenDir(ctx, exec);
+  const state = checkToken(dir);
+  let auth = 'cached';
+
+  if (state.state !== 'valid') {
+    if (process.env.TBFW_AUTO_LOGIN === '0') {
+      return {
+        status: 'needs_auth',
+        tokenState: state.state,
+        reason: '自动登录已关闭（TBFW_AUTO_LOGIN=0）',
+        hint: '把 cookie 粘给 /cpfirmware login <cookie> 或 firmware_login(cookie="...")',
+      };
+    }
+    const login = await ensureToken(dir, {
+      mode: process.env.TBFW_HEADLESS === '1' ? 'headless' : 'auto',
+    });
+    if (login.status !== 'ok') {
+      return {
+        status: 'needs_auth',
+        tokenState: state.state,
+        reason: login.reason ?? login.status,
+        loginUrl: login.loginUrl,
+        browser: login.browser,
+        hint: login.hint,
+      };
+    }
+    auth = login.via === 'silent' ? 'silent' : 'window';
+  }
+
+  try {
+    return { status: 'ok', ...(await syncBoard(ctx, exec)), auth, tokenState: state.state };
+  } catch (e) {
+    if (!/登录态失效|401/.test(String(e.message))) throw e;
+    const login = await ensureToken(dir, { mode: 'auto' });
+    if (login.status !== 'ok') {
+      return {
+        status: 'needs_auth',
+        tokenState: 'rejected',
+        reason: login.reason ?? login.status,
+        loginUrl: login.loginUrl,
+        browser: login.browser,
+        hint: login.hint,
+      };
+    }
+    const res = await syncBoard(ctx, exec);
+    return { status: 'ok', ...res, auth: login.via ?? 'window', tokenState: 'rejected' };
+  }
+}
+
 function syncToolFor(ctx) {
   return {
     name: 'firmware_sync',
@@ -778,55 +833,29 @@ function syncToolFor(ctx) {
           : [{ type: 'text', text: `已同步 ${v.tasks} 个任务 -> ${v.file}（凭据: ${v.auth ?? 'cached'}）` }],
     },
     async execute(_args, exec) {
-      const dir = await tokenDir(ctx, exec);
-      const state = checkToken(dir);
-      let auth = 'cached';
-
-      if (state.state !== 'valid') {
-        if (process.env.TBFW_AUTO_LOGIN === '0') {
-          return {
-            status: 'needs_auth',
-            tokenState: state.state,
-            reason: '自动登录已关闭（TBFW_AUTO_LOGIN=0）',
-            hint: '把 cookie 粘给 firmware_login(cookie="...")',
-          };
-        }
-        const login = await ensureToken(dir, {
-          mode: process.env.TBFW_HEADLESS === '1' ? 'headless' : 'auto',
-        });
-        if (login.status !== 'ok') {
-          return {
-            status: 'needs_auth',
-            tokenState: state.state,
-            reason: login.reason ?? login.status,
-            loginUrl: login.loginUrl,
-            browser: login.browser,
-            hint: login.hint,
-          };
-        }
-        auth = login.via === 'silent' ? 'silent' : 'window';
-      }
-
-      try {
-        return { status: 'ok', ...(await syncBoard(ctx, exec)), auth, tokenState: state.state };
-      } catch (e) {
-        if (!/登录态失效|401/.test(String(e.message))) throw e;
-        const login = await ensureToken(dir, { mode: 'auto' });
-        if (login.status !== 'ok') {
-          return {
-            status: 'needs_auth',
-            tokenState: 'rejected',
-            reason: login.reason ?? login.status,
-            loginUrl: login.loginUrl,
-            browser: login.browser,
-            hint: login.hint,
-          };
-        }
-        const res = await syncBoard(ctx, exec);
-        return { status: 'ok', ...res, auth: login.via ?? 'window', tokenState: 'rejected' };
-      }
+      return syncNow(ctx, exec);
     },
   };
+}
+
+/**
+ * 取/刷新 Teambition 凭据。`/cpfirmware login` 与 `firmware_login` 工具共用。
+ */
+async function loginNow(ctx, exec, options = {}) {
+  const dir = await tokenDir(ctx, exec);
+  if (options.cookie) return loginWithCookie(dir, options.cookie);
+  if (process.env.TBFW_NO_DISPLAY === '1') {
+    return {
+      status: 'no_display',
+      reason: '测试钩子 TBFW_NO_DISPLAY=1',
+      hint: '把 cookie 粘给 /cpfirmware login <cookie>',
+    };
+  }
+  return ensureToken(dir, {
+    mode: options.mode ?? 'auto',
+    timeoutSeconds: options.timeoutSeconds ?? 180,
+    browser: options.browser,
+  });
 }
 
 function loginToolFor(ctx) {
@@ -884,28 +913,48 @@ function loginToolFor(ctx) {
       ],
     },
     async execute(args, exec) {
-      const dir = await tokenDir(ctx, exec);
-      const options = args ?? {};
-      if (options.cookie) return loginWithCookie(dir, options.cookie);
-      if (process.env.TBFW_NO_DISPLAY === '1') {
-        return { status: 'no_display', reason: '测试钩子 TBFW_NO_DISPLAY=1', hint: '把 cookie 粘给 firmware_login(cookie="...")' };
-      }
-      return ensureToken(dir, {
-        mode: options.mode ?? 'auto',
-        timeoutSeconds: options.timeoutSeconds ?? 180,
-        browser: options.browser,
-      });
+      return loginNow(ctx, exec, args ?? {});
     },
   };
 }
 
 
+/**
+ * 斜杠命令 `/cpfirmware` 的实现（宿主侧命令平面，不产生模型消息、不花 token）。
+ * 命令是默认入口；`firmware_*` 工具默认不再注册（config.modelTools = true 才注册）。
+ */
 export const name = 'firmware-finder';
-export const inject = ['tools'];
+export const inject = [];
 
-export function apply(ctx) {
-  ctx.effect(() => ctx.tools.register(findToolFor(ctx)));
-  ctx.effect(() => ctx.tools.register(modelsToolFor(ctx)));
-  ctx.effect(() => ctx.tools.register(syncToolFor(ctx)));
-  ctx.effect(() => ctx.tools.register(loginToolFor(ctx)));
+/** 注入给 command.js 的检索实现（避免两个模块循环 import） */
+const COMMAND_DEPS = {
+  readBoard,
+  modelGroups,
+  resolveModel,
+  search,
+  renderFind,
+  tokenDir,
+  checkToken,
+  syncNow,
+  loginNow,
+};
+
+export function apply(ctx, config = {}) {
+  const settings = config ?? {};
+  if (settings.modelTools !== undefined && typeof settings.modelTools !== 'boolean') {
+    throw new Error('firmware-finder: 配置项 modelTools 必须是布尔值');
+  }
+
+  ctx.inject(['commands'], (commandCtx) => {
+    commandCtx.effect(() => commandCtx.commands.register(commandDefinition(ctx, COMMAND_DEPS)));
+  });
+
+  if (settings.modelTools === true) {
+    ctx.inject(['tools'], (toolCtx) => {
+      toolCtx.effect(() => toolCtx.tools.register(findToolFor(ctx)));
+      toolCtx.effect(() => toolCtx.tools.register(modelsToolFor(ctx)));
+      toolCtx.effect(() => toolCtx.tools.register(syncToolFor(ctx)));
+      toolCtx.effect(() => toolCtx.tools.register(loginToolFor(ctx)));
+    });
+  }
 }
