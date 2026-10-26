@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { checkToken, ensureToken, loginWithCookie, discoverBrowsers, tokenFile } from './login.js';
 
 const PROJECT_ID = '65a8da81950780b816d12bd9'; // 【研发部】CI/CD 发版流程
 const UA =
@@ -271,6 +272,12 @@ async function candidateDirs(ctx, exec) {
   return [...new Set(list)];
 }
 
+/** 凭据所在目录：优先已有 token.json 的候选目录 */
+async function tokenDir(ctx, exec) {
+  const dirs = await candidateDirs(ctx, exec);
+  return dirs.find((d) => fs.existsSync(path.join(d, 'token.json'))) ?? dirs[0];
+}
+
 async function readBoard(ctx, exec) {
   const dirs = await candidateDirs(ctx, exec);
   const dir = dirs.find((d) => fs.existsSync(path.join(d, BOARD_NAME)));
@@ -393,7 +400,15 @@ async function probe(url) {
 }
 
 async function search(ctx, exec, args) {
-  const board = await readBoard(ctx, exec);
+  let board;
+  try {
+    board = await readBoard(ctx, exec);
+  } catch (e) {
+    if (/找不到看板索引/.test(e.message)) {
+      return { status: 'needs_setup', query: String(args.model ?? ''), hint: '先调用 firmware_sync 生成索引（会自动处理登录）', rows: [] };
+    }
+    throw e;
+  }
   const groups = modelGroups(board);
   const query = String(args.model ?? '').trim();
   const { hit, scored } = resolveModel(query, groups);
@@ -572,7 +587,7 @@ function findToolFor(ctx) {
       schema: {
         type: 'object',
         properties: {
-          status: { type: 'string', enum: ['ok', 'empty', 'needs_confirmation'] },
+          status: { type: 'string', enum: ['ok', 'empty', 'needs_confirmation', 'needs_setup'] },
           query: { type: 'string' },
           resolvedModel: { type: 'string' },
           aliases: { type: 'array', items: { type: 'string' } },
@@ -650,6 +665,9 @@ function renderFind(v) {
     lines.push('', '请让用户选定一个后再调用，不要自行猜测。');
     return lines.join('\n');
   }
+  if (v.status === 'needs_setup') {
+    return `还没有本地索引。${v.hint ?? '先调用 firmware_sync。'}`;
+  }
   if (v.status === 'empty') {
     const base = `没有匹配的固件（机型=${v.resolvedModel}）。`;
     return v.note ? `${base}\n· ${v.note}` : `${base}可放宽 system/customer/stage。`;
@@ -725,20 +743,162 @@ function syncToolFor(ctx) {
   return {
     name: 'firmware_sync',
     description:
-      '从 Teambition 重新拉取「【研发部】CI/CD 发版流程」看板的全部任务和归档字段，重建本地索引（约 8600 个任务，耗时 40 秒左右）。索引过期或查不到新版本时使用。需要 .tbfw/token.json 里的登录 cookie。',
+      '从 Teambition 重新拉取「【研发部】CI/CD 发版流程」看板的全部任务和归档字段，重建本地索引（约 8600 个任务，耗时 40 秒左右）。索引过期或查不到新版本时使用。登录凭据缺失或即将过期时会自动处理：先尝试静默刷新，再弹出浏览器登录；失败时返回 needs_auth 并说明原因。',
     parameters: { type: 'object', properties: {} },
     output: {
       schema: {
         type: 'object',
-        properties: { file: { type: 'string' }, tasks: { type: 'integer' } },
+        properties: {
+          status: { type: 'string', enum: ['ok', 'needs_auth'] },
+          file: { type: 'string' },
+          tasks: { type: 'integer' },
+          auth: { type: 'string' },
+          tokenState: { type: 'string' },
+          reason: { type: 'string' },
+          loginUrl: { type: 'string' },
+          hint: { type: 'string' },
+          browser: { type: 'object' },
+        },
       },
-      render: (_a, v) => [{ type: 'text', text: `已同步 ${v.tasks} 个任务 -> ${v.file}` }],
+      render: (_a, v) =>
+        v.status === 'needs_auth'
+          ? [
+              {
+                type: 'text',
+                text: [
+                  `需要登录 Teambition，但自动登录没完成（${v.reason ?? '未知原因'}）。`,
+                  v.browser?.path ? `浏览器: ${v.browser.path} (${v.browser.family})` : null,
+                  v.loginUrl ? `登录页: ${v.loginUrl}` : null,
+                  v.hint ?? null,
+                ]
+                  .filter(Boolean)
+                  .join('\n'),
+              },
+            ]
+          : [{ type: 'text', text: `已同步 ${v.tasks} 个任务 -> ${v.file}（凭据: ${v.auth ?? 'cached'}）` }],
     },
     async execute(_args, exec) {
-      return syncBoard(ctx, exec);
+      const dir = await tokenDir(ctx, exec);
+      const state = checkToken(dir);
+      let auth = 'cached';
+
+      if (state.state !== 'valid') {
+        if (process.env.TBFW_AUTO_LOGIN === '0') {
+          return {
+            status: 'needs_auth',
+            tokenState: state.state,
+            reason: '自动登录已关闭（TBFW_AUTO_LOGIN=0）',
+            hint: '把 cookie 粘给 firmware_login(cookie="...")',
+          };
+        }
+        const login = await ensureToken(dir, {
+          mode: process.env.TBFW_HEADLESS === '1' ? 'headless' : 'auto',
+        });
+        if (login.status !== 'ok') {
+          return {
+            status: 'needs_auth',
+            tokenState: state.state,
+            reason: login.reason ?? login.status,
+            loginUrl: login.loginUrl,
+            browser: login.browser,
+            hint: login.hint,
+          };
+        }
+        auth = login.via === 'silent' ? 'silent' : 'window';
+      }
+
+      try {
+        return { status: 'ok', ...(await syncBoard(ctx, exec)), auth, tokenState: state.state };
+      } catch (e) {
+        if (!/登录态失效|401/.test(String(e.message))) throw e;
+        const login = await ensureToken(dir, { mode: 'auto' });
+        if (login.status !== 'ok') {
+          return {
+            status: 'needs_auth',
+            tokenState: 'rejected',
+            reason: login.reason ?? login.status,
+            loginUrl: login.loginUrl,
+            browser: login.browser,
+            hint: login.hint,
+          };
+        }
+        const res = await syncBoard(ctx, exec);
+        return { status: 'ok', ...res, auth: login.via ?? 'window', tokenState: 'rejected' };
+      }
     },
   };
 }
+
+function loginToolFor(ctx) {
+  return {
+    name: 'firmware_login',
+    description:
+      '获取或刷新 Teambition 登录凭据。默认自动：先用持久化的浏览器 profile 静默换发 token（用户无感），失败则弹出浏览器窗口让用户登录。也可以直接粘贴 cookie 或 DevTools 的「Copy as cURL」整段。凭据缺失、过期，或 firmware_sync 返回 needs_auth 时调用。',
+    parameters: {
+      type: 'object',
+      properties: {
+        cookie: {
+          type: 'string',
+          description: '可选。粘贴完整 Cookie 串、单个 TB_ACCESS_TOKEN，或 DevTools 里 Network → 右键「Copy as cURL」的整段命令',
+        },
+        mode: {
+          type: 'string',
+          enum: ['auto', 'headless', 'window'],
+          description: 'auto=先静默刷新再弹窗（默认）；headless=只试静默刷新；window=直接弹窗',
+        },
+        timeoutSeconds: { type: 'integer', description: '等待用户完成登录的秒数，默认 180' },
+        browser: { type: 'string', description: '可选，指定浏览器路径或命令名（默认用系统默认的 Chromium 系浏览器）' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['ok', 'manual', 'no_display', 'no_browser', 'timeout', 'invalid_cookie'] },
+          via: { type: 'string' },
+          tokenPath: { type: 'string' },
+          expiresAt: { type: 'string' },
+          reason: { type: 'string' },
+          hint: { type: 'string' },
+          loginUrl: { type: 'string' },
+          opened: { type: 'boolean' },
+          browserLaunched: { type: 'boolean' },
+          browser: { type: 'object' },
+        },
+      },
+      render: (_a, v) => [
+        {
+          type: 'text',
+          text:
+            v.status === 'ok'
+              ? `凭据就绪（${v.via ?? 'unknown'}），有效期至 ${v.expiresAt ?? '?'}`
+              : [
+                  `需要你手动完成登录（${v.status}）${v.reason ? '：' + v.reason : ''}`,
+                  v.browser?.path ? `检测到的浏览器: ${v.browser.path} (${v.browser.family})` : null,
+                  v.loginUrl ? `登录页: ${v.loginUrl}${v.opened ? '（已尝试打开）' : ''}` : null,
+                  v.hint ?? null,
+                ]
+                  .filter(Boolean)
+                  .join('\n'),
+        },
+      ],
+    },
+    async execute(args, exec) {
+      const dir = await tokenDir(ctx, exec);
+      const options = args ?? {};
+      if (options.cookie) return loginWithCookie(dir, options.cookie);
+      if (process.env.TBFW_NO_DISPLAY === '1') {
+        return { status: 'no_display', reason: '测试钩子 TBFW_NO_DISPLAY=1', hint: '把 cookie 粘给 firmware_login(cookie="...")' };
+      }
+      return ensureToken(dir, {
+        mode: options.mode ?? 'auto',
+        timeoutSeconds: options.timeoutSeconds ?? 180,
+        browser: options.browser,
+      });
+    },
+  };
+}
+
 
 export const name = 'firmware-finder';
 export const inject = ['tools'];
@@ -747,4 +907,5 @@ export function apply(ctx) {
   ctx.effect(() => ctx.tools.register(findToolFor(ctx)));
   ctx.effect(() => ctx.tools.register(modelsToolFor(ctx)));
   ctx.effect(() => ctx.tools.register(syncToolFor(ctx)));
+  ctx.effect(() => ctx.tools.register(loginToolFor(ctx)));
 }

@@ -46,13 +46,50 @@ dsh plugin install /absolute/path/to/firmware-finder
 |---|---|
 | `firmware_find` | 机型 + 系统 → 固件；机型歧义时返回候选并要求确认 |
 | `firmware_models` | 列出所有机型族及其同族写法 |
-| `firmware_sync` | 从 Teambition 重拉看板索引 |
+| `firmware_sync` | 从 Teambition 重拉看板索引；凭据缺失或过期时自动登录 |
+| `firmware_login` | 获取/刷新登录凭据：静默刷新 → 弹窗登录 → 手动粘贴 |
 
 未指定客户时**默认按 CP** 过滤，并在 `note` / `otherCustomers` 里列出其他客户；传 `customer: "*"` 表示不限。
+
+## 自动登录
+
+`firmware_sync` 在凭据缺失、即将过期（<5 分钟）或被服务端拒绝（401）时，自动按代价从低到高尝试：
+
+1. **静默刷新** —— 用持久化的浏览器 profile 以 headless 模式打开一次，让 SPA 用仍有效的会话换发新 token，用户无感。
+2. **弹窗登录** —— 静默失败则打开浏览器窗口停在登录页，登录完成后自动写回并继续原操作。
+3. **手动兜底** —— 无法自动时（浏览器不是 Chromium 系 / 宿主无图形环境）返回 `manual` 或 `no_display`，并给出具体做法。
+
+### 浏览器支持
+
+自动抓取依赖 CDP 读取 HttpOnly 的 `TB_ACCESS_TOKEN`，因此**只有 Chromium 系可用**：Chrome、Edge、Chromium、Brave、Vivaldi、Opera。
+
+Firefox / Safari 的远程调试协议不是 CDP，无法自动读取。这种情况下插件不会去驱动它，而是打开登录页并提示你手动复制：
+
+> F12 → Network → 任意请求右键「Copy as cURL」→ 把整段粘给 `firmware_login(cookie="...")`
+
+也接受完整 cookie 串或单个 `TB_ACCESS_TOKEN`（后者通常会因缺少 `TEAMBITION_SESSIONID` 被服务端拒绝）。
+
+### 浏览器发现顺序
+
+1. 工具参数 `browser` / 环境变量 `TBFW_BROWSER`
+2. 系统默认浏览器（`xdg-settings` → `.desktop` → 解析 `Exec=`，支持 flatpak/snap 前缀）
+3. PATH、`/snap/bin`、`/var/lib/flatpak/exports/bin`、`~/.local/bin` 扫描（含 `-stable`/`-beta` 变体）
+4. 对候选执行 `--version` 判定是否为 Chromium 系
+
+### 相关环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `TBFW_AUTO_LOGIN=0` | 关闭自动登录，只返回 `needs_auth` |
+| `TBFW_HEADLESS=1` | 只尝试静默刷新，不弹窗 |
+| `TBFW_BROWSER` | 指定浏览器路径或命令名 |
+| `TBFW_LOGIN_TIMEOUT` | 等待登录秒数（默认 180） |
+| `TBFW_NO_DISPLAY=1` | 测试钩子：强制走无图形环境分支 |
 
 ## 关键实现说明
 
 - **零依赖**：本地安装是软链到仓库目录，Node 会按 realpath 解析，所以模块内不能 `import '@deepseek-ai/*'`。工具定义直接手写 JSON Schema 交给 `ctx.tools.register`。
+- **显示环境**：宿主进程常常没有 `DISPLAY`/`WAYLAND_DISPLAY`（例如由服务启动），插件会显式补上同用户的 Wayland 套接字后再启动浏览器。
 - **数据目录**按顺序解析：`DSH_TBFW_DIR` / `DSH_FIRMWARE_DIR` → 会话工作目录（`workingDirectory.ensure(agent)`）→ 部署默认目录 → 进程 cwd，取第一个含 `board-*.json` 的。
 - **机型对齐**在插件里做：字母骨架 + 数字数量比较（`spring2pro` → `SPRING2-10PRO`），只有唯一强匹配才自动确定，否则返回 `needs_confirmation`。
 - **排序**：`生产库归档` > 发布 > 其他（`自归档` 不算归档，`下架` 排最末），同档按版本号里的构建日期倒序。
