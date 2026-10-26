@@ -457,6 +457,16 @@ let inflight = null;
  * 并发调用共享同一次登录。
  */
 export function ensureToken(dataDir, options = {}) {
+  const state = checkToken(dataDir);
+  if (state.state === 'valid' && !options.force) {
+    return Promise.resolve({
+      status: 'ok',
+      via: 'cached',
+      tokenPath: state.file,
+      expiresAt: new Date(state.exp).toISOString(),
+      browserLaunched: false,
+    });
+  }
   if (inflight) return inflight;
   inflight = runEnsure(dataDir, options).finally(() => {
     inflight = null;
@@ -500,8 +510,9 @@ async function runEnsure(dataDir, options) {
     };
   }
 
-  // 1) 静默刷新：用持久化 profile 让 SPA 换发新 token，用户无感
-  if (mode === 'auto' || mode === 'headless') {
+  // 静默刷新实测不可行：Teambition 不会仅凭 TEAMBITION_SESSIONID 换发 TB_ACCESS_TOKEN，
+  // 所以 auto 直接进入弹窗。headless 保留为诊断/未来复用入口。
+  if (mode === 'headless') {
     const silent = await captureViaBrowser({
       dataDir,
       display,
@@ -520,9 +531,7 @@ async function runEnsure(dataDir, options) {
         browser: browserInfo,
       };
     }
-    if (mode === 'headless') {
-      return { status: 'timeout', via: 'silent', reason: silent.error, browser: browserInfo, hint: MANUAL_HINT };
-    }
+    return { status: 'timeout', via: 'silent', reason: silent.error, browser: browserInfo, hint: MANUAL_HINT };
   }
 
   // 2) 弹窗登录

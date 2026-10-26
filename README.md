@@ -53,11 +53,15 @@ dsh plugin install /absolute/path/to/firmware-finder
 
 ## 自动登录
 
-`firmware_sync` 在凭据缺失、即将过期（<5 分钟）或被服务端拒绝（401）时，自动按代价从低到高尝试：
+`firmware_sync` 在凭据缺失、即将过期（<5 分钟）或被服务端拒绝（401）时自动处理：
 
-1. **静默刷新** —— 用持久化的浏览器 profile 以 headless 模式打开一次，让 SPA 用仍有效的会话换发新 token，用户无感。
-2. **弹窗登录** —— 静默失败则打开浏览器窗口停在登录页，登录完成后自动写回并继续原操作。
-3. **手动兜底** —— 无法自动时（浏览器不是 Chromium 系 / 宿主无图形环境）返回 `manual` 或 `no_display`，并给出具体做法。
+- **凭据有效** → 直接使用，不开浏览器（`auth: cached`，0ms）。
+- **凭据无效** → 弹出浏览器窗口停在登录页，登录完成后自动写回并继续原操作（`auth: window`）。
+- **无法自动** → 返回 `manual` / `no_display`，并给出具体做法。
+
+> 关于「静默刷新」：曾尝试用持久化 profile 以 headless 模式打开页面，靠仍有效的 `TEAMBITION_SESSIONID` 换发新 token。实测**不可行**——Teambition 不会仅凭 session cookie 换发 `TB_ACCESS_TOKEN`，登录页也不会自动跳转。因此 `auto` 直接弹窗；`mode: "headless"` 仅保留作诊断入口。
+>
+> `TB_ACCESS_TOKEN` 的 cookie 是会话级的（关窗即失效），真正决定有效期的是 JWT 里的 `exp`（约 3 天）。目前每次过期需要重新扫码一次。
 
 ### 浏览器支持
 
