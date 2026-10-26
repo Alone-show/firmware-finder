@@ -21,8 +21,8 @@
         "zh": "固件检索"
       },
       "description": {
-        "en": "Find production firmware by device model and OS from the Teambition release board's archived fields.",
-        "zh": "按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链。"
+        "en": "Use the /cpfirmware command to find production firmware by device model and OS from the Teambition release board's archived fields.",
+        "zh": "用 /cpfirmware 命令按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链。"
       },
       "icon": "icon.svg",
       "author": "Alone-show",
@@ -41,12 +41,12 @@
       },
       "versions": [
         {
-          "version": "0.2.1",
-          "publishTimestamp": 1793002761,
+          "version": "0.2.2",
+          "publishTimestamp": 1793006399,
           "source": {
             "type": "git",
             "url": "https://github.com/Alone-show/firmware-finder",
-            "commit": "70a416955e1c271166018e202e71a7400a0e6d27"
+            "commit": "3ea23ec6ee8b40bef427d71d71e81fe7a1283254"
           },
           "engines": {}
         }
