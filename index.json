@@ -41,12 +41,12 @@
       },
       "versions": [
         {
-          "version": "0.2.1",
-          "publishTimestamp": 1793002761,
+          "version": "0.2.3",
+          "publishTimestamp": 1793082030,
           "source": {
             "type": "git",
             "url": "https://github.com/Alone-show/firmware-finder",
-            "commit": "70a416955e1c271166018e202e71a7400a0e6d27"
+            "commit": "377902f9b6d063cc70791a51e4cf3a4aaa729486"
           },
           "engines": {}
         }
