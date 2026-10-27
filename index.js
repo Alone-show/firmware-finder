@@ -525,7 +525,7 @@ async function search(ctx, exec, args) {
     );
   }
 
-  return {
+  const result = {
     status: rows.length ? 'ok' : 'empty',
     query,
     resolvedModel: hit.name,
@@ -533,16 +533,30 @@ async function search(ctx, exec, args) {
     customer: unlimited ? '*' : effective,
     customerDefaulted,
     otherCustomers: others.slice(0, 10).map(([c, n]) => ({ customer: c, tasks: n })),
-    note:
-      customerDefaulted && !unlimited
-        ? uniq.length === 0 && othersText
-          ? `客户 CP 下没有匹配；其他客户还有：${othersText}。需要时用 customer 参数切换。`
-          : `未指定客户，已默认按 CP 过滤；其他客户还有：${othersText}`
-        : undefined,
     total: uniq.length,
     pending,
     rows,
   };
+  // DSH 对工具返回值做无损 JSON 校验：值为 undefined 的属性会让整次调用
+  // INVALID_TOOL_OUTPUT，所以没有提示时直接省略该字段（schema 里 note 是可选的）。
+  if (customerDefaulted && !unlimited) {
+    result.note =
+      uniq.length === 0 && othersText
+        ? `客户 CP 下没有匹配；其他客户还有：${othersText}。需要时用 customer 参数切换。`
+        : `未指定客户，已默认按 CP 过滤；其他客户还有：${othersText}`;
+  }
+  return result;
+}
+
+/** 工具返回值要过 DSH 的无损 JSON 校验：undefined 属性会被整次拒绝，这里按 JSON 语义丢掉。 */
+function jsonSafe(value) {
+  if (Array.isArray(value)) return value.map(jsonSafe);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) if (v !== undefined) out[k] = jsonSafe(v);
+    return out;
+  }
+  return value;
 }
 
 const fmtSize = (n) => {
@@ -650,7 +664,7 @@ function findToolFor(ctx) {
       render: (_args, value) => [{ type: 'text', text: renderFind(value) }],
     },
     async execute(args, exec) {
-      return search(ctx, exec, args ?? {});
+      return jsonSafe(await search(ctx, exec, args ?? {}));
     },
   };
 }
@@ -734,7 +748,7 @@ function modelsToolFor(ctx) {
     async execute(_args, exec) {
       const groups = modelGroups(await readBoard(ctx, exec));
       groups.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-      return { families: groups.map((g) => ({ model: g.name, tasks: g.count, aliases: g.aliases })) };
+      return jsonSafe({ families: groups.map((g) => ({ model: g.name, tasks: g.count, aliases: g.aliases })) });
     },
   };
 }
@@ -784,46 +798,46 @@ function syncToolFor(ctx) {
 
       if (state.state !== 'valid') {
         if (process.env.TBFW_AUTO_LOGIN === '0') {
-          return {
+          return jsonSafe({
             status: 'needs_auth',
             tokenState: state.state,
             reason: '自动登录已关闭（TBFW_AUTO_LOGIN=0）',
             hint: '把 cookie 粘给 firmware_login(cookie="...")',
-          };
+          });
         }
         const login = await ensureToken(dir, {
           mode: process.env.TBFW_HEADLESS === '1' ? 'headless' : 'auto',
         });
         if (login.status !== 'ok') {
-          return {
+          return jsonSafe({
             status: 'needs_auth',
             tokenState: state.state,
             reason: login.reason ?? login.status,
             loginUrl: login.loginUrl,
             browser: login.browser,
             hint: login.hint,
-          };
+          });
         }
         auth = login.via === 'silent' ? 'silent' : 'window';
       }
 
       try {
-        return { status: 'ok', ...(await syncBoard(ctx, exec)), auth, tokenState: state.state };
+        return jsonSafe({ status: 'ok', ...(await syncBoard(ctx, exec)), auth, tokenState: state.state });
       } catch (e) {
         if (!/登录态失效|401/.test(String(e.message))) throw e;
         const login = await ensureToken(dir, { mode: 'auto' });
         if (login.status !== 'ok') {
-          return {
+          return jsonSafe({
             status: 'needs_auth',
             tokenState: 'rejected',
             reason: login.reason ?? login.status,
             loginUrl: login.loginUrl,
             browser: login.browser,
             hint: login.hint,
-          };
+          });
         }
         const res = await syncBoard(ctx, exec);
-        return { status: 'ok', ...res, auth: login.via ?? 'window', tokenState: 'rejected' };
+        return jsonSafe({ status: 'ok', ...res, auth: login.via ?? 'window', tokenState: 'rejected' });
       }
     },
   };
@@ -886,15 +900,15 @@ function loginToolFor(ctx) {
     async execute(args, exec) {
       const dir = await tokenDir(ctx, exec);
       const options = args ?? {};
-      if (options.cookie) return loginWithCookie(dir, options.cookie);
+      if (options.cookie) return jsonSafe(loginWithCookie(dir, options.cookie));
       if (process.env.TBFW_NO_DISPLAY === '1') {
-        return { status: 'no_display', reason: '测试钩子 TBFW_NO_DISPLAY=1', hint: '把 cookie 粘给 firmware_login(cookie="...")' };
+        return jsonSafe({ status: 'no_display', reason: '测试钩子 TBFW_NO_DISPLAY=1', hint: '把 cookie 粘给 firmware_login(cookie="...")' });
       }
-      return ensureToken(dir, {
+      return jsonSafe(await ensureToken(dir, {
         mode: options.mode ?? 'auto',
         timeoutSeconds: options.timeoutSeconds ?? 180,
         browser: options.browser,
-      });
+      }));
     },
   };
 }
