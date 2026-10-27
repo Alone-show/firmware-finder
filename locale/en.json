@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Firmware Finder",
-    "description": "Use the /cpfirmware command to locate production firmware for a device model in the Teambition release board's archived fields, with flash and OTA links."
+    "description": "Locate production firmware for a device model in the Teambition release board's archived fields, with flash and OTA links."
   }
 }

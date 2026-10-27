@@ -1,9 +1,9 @@
 {
   "name": "@local/firmware-finder",
-  "version": "0.2.2",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
-  "description": "通过 /cpfirmware 斜杠命令按机型/系统查 Teambition 发版看板归档字段里的量产固件",
+  "description": "按机型/系统在 Teambition 发版看板的归档字段里定位量产固件",
   "exports": {
     ".": "./index.js",
     "./locale/*.json": "./locale/*.json",
@@ -11,7 +11,6 @@
   },
   "files": [
     "index.js",
-    "command.js",
     "login.js",
     "cordis.patch.yml",
     "locale/*.json",
