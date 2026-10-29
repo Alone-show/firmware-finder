@@ -46,7 +46,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/Alone-show/firmware-finder",
-            "commit": "81bb242a9b5e86542c66dfa43e6195ebb85143be"
+            "commit": "3a2b85c4ca017731c57670b153726140a752d21d"
           },
           "engines": {}
         },
