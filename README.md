@@ -26,21 +26,22 @@ dsh plugin install /absolute/path/to/firmware-finder
 
 ## 首次使用需要两份数据
 
-插件只读本地索引，不做登录。两份文件都在数据目录（默认 `$DSH_TBFW_DIR`，否则 `~/.tbfw`：
+插件不做常驻登录，只读本地索引；凭据缺失或过期时由 `firmware_sync` / `firmware_login` 自动处理。两份文件都在数据目录（默认 `$DSH_TBFW_DIR`，否则 `~/.tbfw`）：
 
 | 文件 | 来源 |
 |---|---|
-| `token.json` | `tools/login.sh`（弹浏览器登录后抓 cookie） |
-| `board-<projectId>.json` | `firmware_sync` 工具，或 `tools/sync` 触发 |
+| `token.json` | `firmware_login` 工具自动写入，或 `tools/login.sh`（弹浏览器登录后抓 cookie） |
+| `board-<projectId>.json` | `firmware_sync` 工具（首次调用自动生成） |
 
 ```bash
-# 1) 登录取 token（会打开浏览器，登录完自动关窗）
+# 1)（可选）手动登录取 token（会打开浏览器，登录完自动关窗）
+#    一般可以跳过：第 2 步的 firmware_sync 发现没有凭据时会自动弹窗登录
 ./tools/login.sh
 
 # 2) 在 Harness 里调用 firmware_sync 生成索引（约 40 秒，8600 条）
 ```
 
-## 三个工具
+## 四个工具
 
 | 工具 | 作用 |
 |---|---|
