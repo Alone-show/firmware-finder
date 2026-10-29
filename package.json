@@ -1,9 +1,12 @@
 {
   "name": "@local/firmware-finder",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "用 /firmware 按机型/系统在 Teambition 发版看板的归档字段里定位量产固件",
+  "scripts": {
+    "test": "node gate-smoke.mjs && node model-resolve.test.mjs"
+  },
   "exports": {
     ".": "./index.js",
     "./locale/*.json": "./locale/*.json",

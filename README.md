@@ -39,12 +39,13 @@ dsh plugin install /absolute/path/to/firmware-finder
 ```text
 /firmware <机型> [系统] [参数]           查固件
 /firmware models                         所有机型族与同族写法
+/firmware models <机型>                  只看相关族（含变体，如 APOLLO2-MIX）
 /firmware sync                           重拉看板索引（约 40 秒）
 /firmware login [window|auto|headless]   刷新登录凭据
 /firmware login <cookie 或 Copy as cURL> 手动粘凭据
 ```
 
-机型支持自由写法：`spring2pro`、`SP2-10PRO`、`apollo 12 pro`、`瑞芯微 / APOLLO 12 PRO`、`T3 / SPRING2`。自然语言填充词（「帮我找」「最新的」「固件」「安卓」）会被识别。
+机型支持自由写法：`spring2pro`、`SP2-10PRO`、`apollo 12 pro`、`瑞芯微 / APOLLO 12 PRO`、`T3 / SPRING2`，以及**归档链接里的机型目录名**（如 `APOLLO2MIX`、`SP2-10MIX`）。自然语言填充词（「帮我找」「最新的」「固件」「安卓」）会被识别。
 
 | 参数 | 说明 |
 |---|---|
@@ -61,7 +62,29 @@ dsh plugin install /absolute/path/to/firmware-finder
 
 - 「其他客户还有：QX(16)、YK(10)…」——默认 CP 之外的客户不会被悄悄吞掉；
 - 「存在比已归档版本更新的在制/测试版本」——避免把测试版本当成最新量产版本；
+- 命中变体时标注「变体 APOLLO2-MIX」——同一族里还有别的子型号，行内的「机型」字段未必写全；
 - 索引新鲜度（超过 3 天会提示 `/firmware sync`）。
+
+### 机型别名与变体从哪来
+
+看板的「机型」字段是族级别的（`RK / APOLLO2`、`RK / SPRING2-10PRO`…），子型号只出现在归档链接的目录、以及版本号前缀里。所以插件在「机型」字段之外，还会读**归档链接**：
+
+```text
+https://next.cpinnov.run/PROD/RK/ANDROID/APOLLO2-MIX/CP/LCD7-12/…
+                              └chip┘└─OS─┘└──机型──┘
+```
+
+规则（只保留可解释的三种归属，不新增独立族）：
+
+| 情况 | 处理 | 例子 |
+|---|---|---|
+| 与已有族同名（含 `SP2↔SPRING2`、`APOLLO2↔APOLLO` 展开、省略尺寸数字） | 并入该族「同族写法」 | `SP2-10MIX` → `RK / SPRING2-10MIX`、`SP2-PRO` → `RK / SPRING2-10PRO` |
+| 比族名更长、能挂到父族 | 记为「变体」 | `APOLLO2-MIX` → `RK / APOLLO2` |
+| 其它 | 丢弃 | `PRO` |
+
+只看 `/PROD/…`（正式归档）：实测当前索引 8651 条里有 455 条能取到目录名，共 20 个名字 → 18 个并入同族写法、1 个变体（`APOLLO2-MIX`）、1 个丢弃，**0 噪声**。不看 `TEST/PRE/DEV`（实测只会多出 `62` 这种垃圾目录名），也不解析 `mdmobs` / 华为 OBS 的 `/11/…` 旧形状（只是拼写变体）。
+
+匹配仍然用归一后的子串（`apollo2mix` 在标题/版本号/链接里），所以目录名只影响「认得出机型」，不影响结果过滤；`/firmware APOLLO2` 这类族查询也不会被变体收窄。
 
 ### 斜杠规则（严格）
 
@@ -90,8 +113,8 @@ dsh plugin install /absolute/path/to/firmware-finder
 
 | 工具 | 作用 |
 |---|---|
-| `firmware_find` | 机型 + 系统 → 固件；机型歧义时返回候选并要求确认 |
-| `firmware_models` | 列出所有机型族及其同族写法 |
+| `firmware_find` | 机型 + 系统 → 固件；机型歧义时返回候选并要求确认（含该族变体） |
+| `firmware_models` | 列出机型族、同族写法与变体；传 `model` 只看相关族 |
 | `firmware_sync` | 从 Teambition 重拉看板索引；凭据缺失或过期时自动登录 |
 | `firmware_login` | 获取/刷新登录凭据：静默刷新 → 弹窗登录 → 手动粘贴 |
 
@@ -142,10 +165,11 @@ Firefox / Safari 的远程调试协议不是 CDP，无法自动读取。这种�
 
 - **零依赖**：本地安装是软链到仓库目录，Node 会按 realpath 解析，所以模块内不能 `import '@deepseek-ai/*'`。工具定义直接手写 JSON Schema 交给 `ctx.tools.register`。
 - **`/firmware` 入口**：`skill/SKILL.md`（frontmatter 里 `disable-model-invocation: true`）在 `apply()` 里用 `ctx.skills.register` 注册；注册表不读 frontmatter，插件自己解析后把 `invocation.modelInvocable=false / userInvocable=true` 传进去，所以模型目录看不到它，`/` 菜单看得到。
-- **闸门**：`ctx.on('tools/pre-execute')` 只放行最新一条 direct user 消息里含独立 `/firmware` 的轮次，其余返回 `{ kind: 'deny', reason: … }`。判定逻辑与离线测试在 `gate-smoke.mjs`（`node gate-smoke.mjs`）。
+- **闸门**：`ctx.on('tools/pre-execute')` 只放行最新一条 direct user 消息里含独立 `/firmware` 的轮次，其余返回 `{ kind: 'deny', reason: … }`。判定逻辑与离线测试在 `gate-smoke.mjs`；机型/别名/变体解析的离线测试在 `model-resolve.test.mjs`（含迷你看板 fixture）。`npm test` 两个都跑，均不需要网络与凭据。
+- **归档目录名**：`linkModelDir()` 只认 `/PROD/<chip>/<OS>/<机型>/…`，`foldModelDirs()` 再用现有打分把它归一到族（同族写法 / 变体 / 丢弃）。
 - **显示环境**：宿主进程常常没有 `DISPLAY`/`WAYLAND_DISPLAY`（例如由服务启动），插件会显式补上同用户的 Wayland 套接字后再启动浏览器。
 - **数据目录**按顺序解析：`DSH_TBFW_DIR` / `DSH_FIRMWARE_DIR` → 会话工作目录（`workingDirectory.ensure(agent)`）→ 部署默认目录 → 进程 cwd，取第一个含 `board-*.json` 的。
-- **机型对齐**在插件里做：字母骨架 + 数字数量比较（`spring2pro` → `SPRING2-10PRO`），只有唯一强匹配才自动确定，否则返回 `needs_confirmation`。
+- **机型对齐**在插件里做：先按族名精确命中（`APOLLO2` 不会被同名别名/变体收窄），再按归档链接里的机型目录名命中变体（`APOLLO2MIX` → 变体 `APOLLO2-MIX`），最后才是近似打分：字母骨架 + 数字数量比较（`spring2pro` → `SPRING2-10PRO`）。只有唯一强匹配才自动确定，否则返回 `needs_confirmation`（候选里会带该族的变体）。
 - **排序**：`生产库归档` > 发布 > 其他（`自归档` 不算归档，`下架` 排最末），同档按版本号里的构建日期倒序。
 - **构建日期**优先取 `固件版本` 字段，缺了就从标题或下载地址里捞（在制版本常常只有链接）。
 - **在制版本提示**：比已归档最新还新的测试/压测版本会单独列在 `pending`。
@@ -160,6 +184,8 @@ Firefox / Safari 的远程调试协议不是 CDP，无法自动读取。这种�
 - 登录 cookie 约 24 小时过期，JWT 约 3 天；过期后发一次 `/firmware sync`（或 `/firmware login`）。
 - `sync` 约 40 秒、`login` 最长 180 秒，期间工具卡片保持 running。
 - 严格斜杠：追问、确认、粘 cookie 都必须带 `/firmware`，这是「只能 / 触发」的直接代价。
+- 机型别名/变体只从 `/PROD/…` 归档链接提取（只影响「认得出机型」）：只在 `TEST/PRE/DEV` 出现的新机型不会被提前识别，会正常走 `needs_confirmation`。
+- 目录名与「机型」字段可能不一致（例如 `CP_SP2-10MIX_…` 这条任务的机型写的是 `RK / SPRING2-10PRO`），此时以返回的 `variant` / 版本号为准，不要只看「机型」字段。
 
 ## 许可
 

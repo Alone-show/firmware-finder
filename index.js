@@ -80,9 +80,75 @@ function modelGroups(board) {
     g.names.sort((a, b) => b[0] - a[0] || a[1].localeCompare(b[1]));
     g.name = g.names[0][1];
     g.aliases = g.names.slice(1).map((n) => n[1]);
+    g.variants = new Map();
     out.push(g);
   }
+  foldModelDirs(board, out);
   return out;
+}
+
+/**
+ * 把归档链接里的机型目录名并入已有族：
+ * - 与族同名（含 sp2↔spring2 / apollo2↔apollo 展开、以及省略尺寸数字）-> 并入 aliases；
+ * - 只是更长、能挂到某个父族 -> 记入 variants（如 APOLLO2-MIX -> APOLLO2）；
+ * - 其它丢弃（如 PRO），不新增独立族，否则同一机型会被拆成两个族。
+ */
+function foldModelDirs(board, groups) {
+  const dirs = new Map();
+  for (const t of board.items) {
+    const hit = taskModelDir(t);
+    if (!hit) continue;
+    const core = nz(hit.model);
+    if (!core) continue;
+    const entry = dirs.get(core) ?? { label: hit.model, count: 0, chip: hit.chip };
+    entry.count += 1;
+    dirs.set(core, entry);
+  }
+  const extraAliases = new Map();
+  for (const [core, info] of dirs) {
+    const cores = queryCores(core);
+    let best = null;
+    for (const g of groups) {
+      let score = Math.max(...cores.map((c) => scoreCore(c, g)));
+      // 同分时优先 <chip> 与族 vendor 一致的：路径里的芯片段比分数更可信
+      if (score > 0 && g.vendor && chipVendor(info.chip) === g.vendor) score += 5;
+      if (!best || score > best.score) best = { score, group: g };
+    }
+    if (!best) continue;
+    if (best.score >= 85) {
+      const list = extraAliases.get(best.group) ?? [];
+      list.push([info.count, info.label]);
+      extraAliases.set(best.group, list);
+      continue;
+    }
+    if (best.score < 40) continue;
+    // 40~70：只有「族名是变体名的前缀」才当变体，避免把 PRO 这类噪声挂上去
+    let parent = null;
+    for (const g of groups) {
+      if (!cores.some((c) => c.startsWith(g.core) && c.length > g.core.length)) continue;
+      if (!parent || g.core.length > parent.core.length) parent = g;
+    }
+    if (parent && !parent.variants.has(core)) {
+      parent.variants.set(core, { core, label: info.label, count: info.count });
+    }
+  }
+  for (const [g, list] of extraAliases) {
+    const seen = new Set([g.name, ...g.aliases].map((n) => n.toLowerCase()));
+    for (const [, name] of list.sort((a, b) => b[0] - a[0])) {
+      const low = name.toLowerCase();
+      if (seen.has(low)) continue;
+      seen.add(low);
+      g.aliases.push(name);
+    }
+  }
+}
+
+/** 族的变体列表（按出现次数降序，供确认候选/机型列表展示） */
+function variantList(g, limit = 5) {
+  return [...(g?.variants?.values() ?? [])]
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+    .slice(0, limit)
+    .map((v) => ({ label: v.label, tasks: v.count }));
 }
 
 /** 查询侧的缩写展开：SP2 <-> SPRING2、APOLLO <-> APOLLO2，让路径式写法也能命中字段全称 */
@@ -134,6 +200,22 @@ function resolveModel(query, groups) {
   const { vendor: qv, core: qc } = canonModel(query);
   if (!qc) return { hit: null, scored: [] };
   const cores = queryCores(qc);
+  // 1) 族名精确命中优先：否则 /firmware APOLLO2 会被「APOLLO2」这个目录别名/变体收窄
+  const exacts = groups.filter((g) => cores.includes(g.core));
+  if (exacts.length) {
+    const pick = (qv && exacts.find((g) => g.vendor === qv)) || exacts[0];
+    return { hit: pick, scored: exacts.map((g) => [100, g]) };
+  }
+  // 2) 归档链接里的机型目录名（变体）精确命中
+  for (const g of groups) {
+    for (const c of cores) {
+      const variant = g.variants?.get(c);
+      if (!variant) continue;
+      if (qv && g.vendor && g.vendor !== qv) continue;
+      return { hit: g, variant, scored: [[100, g]] };
+    }
+  }
+  // 3) 近似打分（阈值不变）
   const scored = [];
   for (const g of groups) {
     let score = Math.max(...cores.map((c) => scoreCore(c, g)));
@@ -166,6 +248,54 @@ function modelVariants(model) {
 }
 
 const asList = (v) => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]);
+
+/* ------------------------------------------------------------------ *
+ * 归档链接里的机型目录名（只认 PROD）
+ * ------------------------------------------------------------------ */
+
+const OS_SEGMENTS = new Set(['android', 'debian', 'linux', 'buildroot']);
+
+/** 路径里的 <chip> 段 -> 与族一致的 vendor 键 */
+function chipVendor(chip) {
+  const known = vendorKey(chip);
+  if (known) return known;
+  const low = String(chip ?? '').toLowerCase();
+  if (low === 'allwinner' || low === 'aw') return 'allwinner';
+  if (low === 'qualcomm' || low === 'qcom' || low === 'qc') return 'qualcomm';
+  return '';
+}
+
+/**
+ * 只从正式归档路径取机型：/PROD/<chip>/<OS>/<机型>/...
+ *
+ * 不看 TEST/PRE/DEV（实测只多出 "62" 这类垃圾目录名），也不解析 mdmobs / 华为 OBS
+ * 的 /11/... 旧形状（只是拼写变体，不增加信息）。
+ */
+function linkModelDir(rawUrl) {
+  let url;
+  try {
+    url = new URL(String(rawUrl));
+  } catch {
+    return null;
+  }
+  const segs = url.pathname.split('/').filter(Boolean);
+  if (segs.length < 4) return null;
+  if (segs[0].toLowerCase() !== 'prod') return null;
+  if (!OS_SEGMENTS.has(segs[2].toLowerCase())) return null;
+  const model = segs[3].trim();
+  return model ? { chip: segs[1], model } : null;
+}
+
+/** 任务里第一个能解析的归档链接目录名 */
+function taskModelDir(task) {
+  for (const key of LINK_FIELDS) {
+    for (const value of asList(task.fields?.[key])) {
+      const hit = linkModelDir(value);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
 
 function linksOf(task) {
   const out = {};
@@ -414,25 +544,30 @@ async function search(ctx, exec, args) {
   }
   const groups = modelGroups(board);
   const query = String(args.model ?? '').trim();
-  const { hit, scored } = resolveModel(query, groups);
+  const { hit, scored, variant } = resolveModel(query, groups);
   if (!hit) {
     return {
       status: 'needs_confirmation',
       query,
       note: '机型无法唯一确定，请让用户在候选里选一个，不要自行猜测',
+      hint:
+        '候选里的 variants 是归档链接中的机型目录名（如 APOLLO2-MIX）；' +
+        '用户说法里的 MIX/PLUS/PRO/A 后缀可以直接作为变体重试，不必换其它工具或数据源',
       candidates: scored.slice(0, 8).map(([score, g]) => ({
         model: g.name,
         score,
         tasks: g.count,
         aliases: g.aliases,
+        variants: variantList(g),
       })),
       rows: [],
     };
   }
 
-  const variants = modelVariants(hit.name);
+  // 变体查询只按变体名过滤；族查询维持原行为（含同族写法）
+  const needles = variant ? [variant.core] : modelVariants(hit.name);
   let cands = board.items.filter(
-    (t) => hitModel(t, variants) && hitSystem(t, args.system, args.mainline),
+    (t) => hitModel(t, needles) && hitSystem(t, args.system, args.mainline),
   );
   // 客户维度：未指定时默认 CP，但必须把「其他客户还有什么」讲出来
   const customerPool = new Map();
@@ -509,6 +644,7 @@ async function search(ctx, exec, args) {
       language: asList(t.fields?.['固件语言']).join(', '),
       stage: t.stage ?? '',
       updated: String(t.updated ?? '').slice(0, 10),
+      ...(variant ? { variant: variant.label } : {}),
       links,
       task: t.url,
     };
@@ -540,6 +676,7 @@ async function search(ctx, exec, args) {
     pending,
     rows,
   };
+  if (variant) result.variant = variant.label;
   // DSH 对工具返回值做无损 JSON 校验：值为 undefined 的属性会让整次调用
   // INVALID_TOOL_OUTPUT，所以没有提示时直接省略该字段（schema 里 note 是可选的）。
   if (customerDefaulted && !unlimited) {
@@ -607,8 +744,10 @@ function findToolFor(ctx) {
           status: { type: 'string', enum: ['ok', 'empty', 'needs_confirmation', 'needs_setup'] },
           query: { type: 'string' },
           resolvedModel: { type: 'string' },
+          variant: { type: 'string' },
           aliases: { type: 'array', items: { type: 'string' } },
           note: { type: 'string' },
+          hint: { type: 'string' },
           customer: { type: 'string' },
           customerDefaulted: { type: 'boolean' },
           otherCustomers: {
@@ -640,6 +779,13 @@ function findToolFor(ctx) {
                 score: { type: 'number' },
                 tasks: { type: 'integer' },
                 aliases: { type: 'array', items: { type: 'string' } },
+                variants: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: { label: { type: 'string' }, tasks: { type: 'integer' } },
+                  },
+                },
               },
             },
           },
@@ -656,6 +802,7 @@ function findToolFor(ctx) {
                 language: { type: 'string' },
                 stage: { type: 'string' },
                 updated: { type: 'string' },
+                variant: { type: 'string' },
                 links: { type: 'object' },
                 checks: { type: 'object' },
                 task: { type: 'string' },
@@ -677,8 +824,12 @@ function renderFind(v) {
     const lines = [`机型「${v.query}」无法唯一确定，需要用户确认：`, ''];
     for (const c of v.candidates) {
       const alias = c.aliases?.length ? `  (同族写法: ${c.aliases.join(' / ')})` : '';
-      lines.push(`- ${c.model}  [${c.score} 分, ${c.tasks} 个任务]${alias}`);
+      const vs = c.variants?.length
+        ? `  变体: ${c.variants.map((x) => `${x.label}(${x.tasks})`).join(' / ')}`
+        : '';
+      lines.push(`- ${c.model}  [${c.score} 分, ${c.tasks} 个任务]${alias}${vs}`);
     }
+    if (v.hint) lines.push('', `提示：${v.hint}`);
     lines.push('', '请让用户选定一个后再调用，不要自行猜测。');
     return lines.join('\n');
   }
@@ -686,13 +837,15 @@ function renderFind(v) {
     return `还没有本地索引。${v.hint ?? '先调用 firmware_sync。'}`;
   }
   if (v.status === 'empty') {
-    const base = `没有匹配的固件（机型=${v.resolvedModel}）。`;
+    const base = `没有匹配的固件（机型=${v.resolvedModel}${
+      v.variant ? ` · 变体 ${v.variant}` : ''
+    }）。`;
     return v.note ? `${base}\n· ${v.note}` : `${base}可放宽 system/customer/stage。`;
   }
 
   const head = `命中 ${v.total} 条，显示 ${v.rows.length} 条（机型=${v.resolvedModel}${
-    v.aliases?.length ? `，同族写法 ${v.aliases.join('/')}` : ''
-  }）`;
+    v.variant ? ` · 变体 ${v.variant}` : ''
+  }${v.aliases?.length ? `，同族写法 ${v.aliases.join('/')}` : ''}）`;
   const lines = [head, ''];
   if (v.note) lines.push(`· ${v.note}`, '');
   if (v.pending?.length) {
@@ -720,8 +873,13 @@ function modelsToolFor(ctx) {
   return {
     name: 'firmware_models',
     description:
-      '（仅当用户输入 /firmware 时可用）列出 Teambition 发版看板里出现过的所有机型族，含每个族的规范写法和同族别名、任务数。当 firmware_find 无法确定机型，或用户说法与看板不一致时使用。',
-    parameters: { type: 'object', properties: {} },
+      '（仅当用户输入 /firmware 时可用）列出 Teambition 发版看板里出现过的机型族，含规范写法、同族别名（含归档链接目录里的缩写写法，如 SP2-10MIX）、变体（如 APOLLO2-MIX）和任务数。传 model 时只返回匹配的族。机型写法不确定时先查这里，不要用其它插件的数据源。',
+    parameters: {
+      type: 'object',
+      properties: {
+        model: { type: 'string', description: '可选。只看与这个写法相关的族/变体，如 APOLLO2MIX、SP2-10MIX' },
+      },
+    },
     output: {
       schema: {
         type: 'object',
@@ -734,6 +892,13 @@ function modelsToolFor(ctx) {
                 model: { type: 'string' },
                 tasks: { type: 'integer' },
                 aliases: { type: 'array', items: { type: 'string' } },
+                variants: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: { label: { type: 'string' }, tasks: { type: 'integer' } },
+                  },
+                },
               },
             },
           },
@@ -743,15 +908,33 @@ function modelsToolFor(ctx) {
         {
           type: 'text',
           text: v.families
-            .map((f) => `${f.model}  (${f.tasks})${f.aliases.length ? `  = ${f.aliases.join(' / ')}` : ''}`)
+            .map(
+              (f) =>
+                `${f.model}  (${f.tasks})${f.aliases.length ? `  = ${f.aliases.join(' / ')}` : ''}${
+                  f.variants?.length ? `  变体: ${f.variants.map((x) => `${x.label}(${x.tasks})`).join(' / ')}` : ''
+                }`,
+            )
             .join('\n'),
         },
       ],
     },
-    async execute(_args, exec) {
+    async execute(args, exec) {
       const groups = modelGroups(await readBoard(ctx, exec));
-      groups.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-      return jsonSafe({ families: groups.map((g) => ({ model: g.name, tasks: g.count, aliases: g.aliases })) });
+      const query = String(args?.model ?? '').trim();
+      let picked = groups;
+      if (query) {
+        const { hit, scored } = resolveModel(query, groups);
+        picked = hit ? [hit] : scored.slice(0, 5).map(([, g]) => g);
+      }
+      picked = [...picked].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+      return jsonSafe({
+        families: picked.map((g) => ({
+          model: g.name,
+          tasks: g.count,
+          aliases: g.aliases,
+          variants: variantList(g, 20),
+        })),
+      });
     },
   };
 }
@@ -1054,4 +1237,15 @@ export const __internals = {
   messageText,
   recentDirectUserMessages,
   slashInvocationOpen,
+  canonModel,
+  queryCores,
+  scoreCore,
+  modelGroups,
+  foldModelDirs,
+  resolveModel,
+  variantList,
+  linkModelDir,
+  taskModelDir,
+  hitModel,
+  search,
 };
