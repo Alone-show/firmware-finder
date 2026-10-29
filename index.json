@@ -21,8 +21,8 @@
         "zh": "固件检索"
       },
       "description": {
-        "en": "Find production firmware by device model and OS from the Teambition release board's archived fields.",
-        "zh": "按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链。"
+        "en": "Type /firmware to find production firmware by device model and OS in the Teambition release board's archived fields, with flash and OTA links.",
+        "zh": "输入 /firmware 触发：按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链。"
       },
       "icon": "icon.svg",
       "author": "Alone-show",
@@ -40,6 +40,16 @@
         "labels": []
       },
       "versions": [
+        {
+          "version": "0.3.0",
+          "publishTimestamp": 1793241880,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Alone-show/firmware-finder",
+            "commit": "3a88782aeef40f25c04b4c48bb6b33de7fe36026"
+          },
+          "engines": {}
+        },
         {
           "version": "0.2.3",
           "publishTimestamp": 1793082030,
