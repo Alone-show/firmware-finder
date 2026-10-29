@@ -15,7 +15,7 @@ disable-model-invocation: true
 - 机型：`spring2pro`、`SP2-10PRO`、`apollo 12 pro`、`瑞芯微 / APOLLO 12 PRO`、`T3 / SPRING2`。
 - 系统：安卓 / Android、Debian、BuildRoot、Linux（工具里写作 `Android` / `Debian` / `BuildRoot`）。
 - 客户：`-c` / `--customer CP|SZ|QX|VR|*`；缺省按 CP 过滤，`*` / 「所有客户」表示不限客户。
-- 其它：`--version <V1.08>`、`--mainline <Android-11>`、`--stage <阶段>`、`-n` / `--limit <1-20>`、`--verify`、`--all`。
+- 其它：`--version <V1.08>`、`--mainline <Android-11>`、`--stage <阶段>`、`-n` / `--limit <1-20>`、`--verify`、`--all`、`--source auto|tb|alist`。
 - 用户说「最新的」时用 `limit: 1`；没说条数时用工具默认值。
 
 ## 子命令
@@ -33,13 +33,15 @@ disable-model-invocation: true
 2. `fixfinder` / `fix_*` 是 bug 修复索引，**不是机型索引**：不要用它解析机型、也不要为了查机型去 `fix_sync`。
 3. `needs_confirmation` 之后**不要**对同一机型重复调用（核心字母数字相同，得分必然相同）；把候选和变体列表交给用户即可。
 4. 一次把参数带满：「最新的」→ `limit: 1`；要同时看归档与在制 → `limit: 3`；看全客户 → `customer: "*"`（不要先 CP 再 `*`）；要体积第一次就带 `verify: true`（`next`/`alist` 是内网，不会被校验）。
-5. `pending` 字段已经覆盖「比归档更新」的在制/测试版本，不需要再去 alist / OSS 探查；只有用户明确问「构建产物是否已上传」时才做额外校验。
+5. `pending` 字段已经覆盖「比归档更新」的在制/测试版本；Teambition 取不到时工具会**自动用 alist 兜底**，不需要你手工拼 alist 路径，也不要绕过工具去 alist/OSS 探查；只有用户明确问「构建产物是否已上传」时才做额外校验。
 
 ## 流程
 
 1. 索引缺失或过期（超过 3 天）时先 `firmware_sync`（约 40 秒，凭据缺失会弹浏览器，最长约 180 秒）；用户的 `/firmware` 请求只是查询时可先直接 `firmware_find`，只有返回提示索引过期/缺失才补 `sync`。
 2. 调用 `firmware_find`，按 `status` 处理：
-   - `ok`：用 markdown 表格或列表给出版本、构建日期、客户，以及线刷 / OTA 直链，链接写成 `[名称](url)` 便于点击；同时转述 `note`、`otherCustomers`（其它客户）、`pending`（比已归档更新的在制/测试版本）里的信息，不要丢。返回 `variant` 时说明结果来自该变体（如「变体 APOLLO2-MIX」），因为同一族里还有别的子型号。
+   - `ok`：用 markdown 表格或列表给出版本、构建日期、客户，以及线刷 / OTA 直链，链接写成 `[名称](url)` 便于点击；同时转述 `note`、`otherCustomers`（其它客户）、`pending`（比已归档更新的在制/测试版本）里的信息，不要丢。返回 `variant` 时说明结果来自该变体（如「变体 APOLLO2-MIX」），因为同一族里还有别的子型号；返回 `matchedFamilies` 时说明命中了同族等价写法（如 `APOLLO2-7` ≡ `APOLLO2-7A`），提醒刷写前确认硬件。
+   - 行里带 `source: "alist"` / `"both"` 时，说明该版本来自 alist 产品目录（Teambition 归档字段没有链接），并把 `alist.size` / `artifacts` / `sha256` 一并转述；`alist.ok=false` 时说明兜底数据源不可达。
+   - alist 行的客户规则与 Teambition 完全一致：默认 CP，`otherCustomers` 里的其它客户必须列出（YM / SmartAG / LPX / LACOS 等），不要诱导跨客户混刷。
    - `needs_confirmation`：把候选机型（含 `variants` 变体）列出来，请用户确认并用 `/firmware <规范机型> [系统] [参数]` 重发；不要替用户猜，也不要在同一轮重复调用。
    - `needs_auth`：按提示调用 `firmware_login`；自动登录失败时，请用户把 cookie 或 DevTools 的「Copy as cURL」以 `/firmware login <cookie>` 的形式发来。
    - 其它状态/错误：原样说明原因，并给出下一步（`/firmware sync`、`/firmware models`、`/firmware login`）。
@@ -49,6 +51,6 @@ disable-model-invocation: true
 
 ## 输出
 
-- 直接给结论：机型、系统、版本、构建日期、客户、线刷/OTA 链接；有 `variant` 时一并写出。
+- 直接给结论：机型、系统、版本、构建日期、客户、线刷/OTA 链接；有 `variant` / `matchedFamilies` 时一并写出，并标注数据源（Teambition 还是 alist）。
 - 索引时间超过 3 天就提示用户 `/firmware sync`。
 - 不确定机型时给候选，不要编造版本号或链接。

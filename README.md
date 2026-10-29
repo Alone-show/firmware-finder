@@ -57,6 +57,7 @@ dsh plugin install /absolute/path/to/firmware-finder
 | `-n, --limit <1-20>` | 显示条数，默认 5；说「最新」时为 1 |
 | `--verify` | HEAD 校验下载链接并显示体积（跳过内网 next/alist） |
 | `--all` | 包含没有固件链接的任务 |
+| `--source <auto\|tb\|alist>` | 数据源；默认 `auto`：先查 Teambition，取不到（无行或无链接）才用 alist 兜底；`tb` 只用 Teambition，`alist` 只查 alist |
 
 结果里会带上：
 
@@ -64,6 +65,35 @@ dsh plugin install /absolute/path/to/firmware-finder
 - 「存在比已归档版本更新的在制/测试版本」——避免把测试版本当成最新量产版本；
 - 命中变体时标注「变体 APOLLO2-MIX」——同一族里还有别的子型号，行内的「机型」字段未必写全；
 - 索引新鲜度（超过 3 天会提示 `/firmware sync`）。
+
+### 数据源：Teambition 为主，alist 兜底
+
+`firmware_find` 有两条数据源，默认只在主源取不到时才用第二条：
+
+| 数据源 | 内容 | 何时使用 |
+|---|---|---|
+| Teambition 看板归档字段 | `固件下载地址` / `OSS 线刷地址` / `OSS OTA地址` / `OSS 差分包地址` | 默认主源；命中且有链接时**不会**访问 alist |
+| alist 产品目录 `https://alist.cpinnov.run/PROD/<chip>/<OS>/<机型>/<客户>/<LCD*>/<版本>/` | 版本目录名 + `*.img` / `*_OTA.img` / `sha256sum.txt` | `--source auto`（默认）下，Teambition 无行或行内无链接时 |
+
+典型场景：**CP 的 Debian 整机包只发到 alist，没有回写 Teambition 归档字段**——`/firmware APOLLO2-7 debian -c CP` 以前会返回“没有匹配”，现在会自动兜底并标注 `source=alist`。
+
+兜底行的约定：
+
+- `source` = `alist`（或 `both`：同版本两边都有，以 Teambition 行为主、alist 补空链接）；
+- 客户维度与主源完全一致：**默认 CP**，`*` 不限；alist 客户目录按 `CP→CP / YMZH→YM / SMARTAG、SmartAG→SmartAG / LPX→LPX / LACOS→LACOS` 映射，未识别目录原样保留并标 `unmappedCustomer`；
+- 默认 CP 且 CP 没有产物时，`otherCustomers` 会列出其它客户（与主源同一套措辞，不会悄悄吞掉）；
+- `artifacts` 给出 `img` / `ota` 文件名与体积；`links` 里的线刷/OTA 是 alist 的 **signed raw_url**（不带 sign 的 `/p/...` 会返回 JSON 错误）；
+- alist 不可达时静默降级：结果附 `alist: { ok: false, reason }`，不影响 Teambition 结果。
+
+相关环境变量：
+
+| 变量 | 作用 |
+|---|---|
+| `DSH_ALIST_BASE` | alist 站点（默认 `https://alist.cpinnov.run`） |
+| `DSH_ALIST_TTL_MS` | 目录/文件元数据缓存 TTL（默认 24h） |
+| `DSH_ALIST_DISABLE=1` | 完全关闭 alist 兜底（等价 `--source tb`） |
+
+> alist 走 `node:https` 直连：DSH 里 `NODE_USE_ENV_PROXY=1` 会把内网请求塞进本机代理，实测 TLS 直接断开，所以客户端显式绕开代理。
 
 ### 机型别名与变体从哪来
 
@@ -78,13 +108,15 @@ https://next.cpinnov.run/PROD/RK/ANDROID/APOLLO2-MIX/CP/LCD7-12/…
 
 | 情况 | 处理 | 例子 |
 |---|---|---|
-| 与已有族同名（含 `SP2↔SPRING2`、`APOLLO2↔APOLLO` 展开、省略尺寸数字） | 并入该族「同族写法」 | `SP2-10MIX` → `RK / SPRING2-10MIX`、`SP2-PRO` → `RK / SPRING2-10PRO` |
+| 与已有族同名（含 `SP2↔SPRING2`、`APOLLO2↔APOLLO` 展开、省略尺寸数字、`7↔7A` / `12↔12A`、`二代↔gen2`） | 并入该族「同族写法」 | `SP2-10MIX` → `RK / SPRING2-10MIX`、`APOLLO2-7A` ≡ `APOLLO2-7`、`APOLLO2-12A` ≡ `APOLLO2-12` |
 | 比族名更长、能挂到父族 | 记为「变体」 | `APOLLO2-MIX` → `RK / APOLLO2` |
 | 其它 | 丢弃 | `PRO` |
 
 只看 `/PROD/…`（正式归档）：实测当前索引 8651 条里有 455 条能取到目录名，共 20 个名字 → 18 个并入同族写法、1 个变体（`APOLLO2-MIX`）、1 个丢弃，**0 噪声**。不看 `TEST/PRE/DEV`（实测只会多出 `62` 这种垃圾目录名），也不解析 `mdmobs` / 华为 OBS 的 `/11/…` 旧形状（只是拼写变体）。
 
 匹配仍然用归一后的子串（`apollo2mix` 在标题/版本号/链接里），所以目录名只影响「认得出机型」，不影响结果过滤；`/firmware APOLLO2` 这类族查询也不会被变体收窄。
+
+**等价写法（0.4.0）**：`apollo2_7` / `APOLLO2-7` / `APOLLO2-7A` / `瑞芯微 / APOLLO 7 二代` 收敛到同一族，`12 / 12A` 同理，`12PRO` / `12PLUS` / `MIX` 不会被吞。等价只影响「召回」：行里保留原始机型串，命中多个族时结果带 `matchedFamilies`，并对同族写法提示刷写前确认硬件。
 
 ### 斜杠规则（严格）
 
@@ -180,7 +212,7 @@ Firefox / Safari 的远程调试协议不是 CDP，无法自动读取。这种�
 
 ## 已知限制
 
-- `next.cpinnov.run` / `alist.cpinnov.run` 是内网分享页（`10.16.18.x`），外网不可达；实体文件在 `minio.cpuniverse.cn` / `mdmobs.cpuniverse.cn`。`--verify` 只校验后者。
+- `next.cpinnov.run` / `alist.cpinnov.run` 是内网分享页（`10.16.18.x`），外网不可达；实体文件在 `minio.cpuniverse.cn` / `mdmobs.cpuniverse.cn`。`--verify` 只校验后者；alist 兜底的链接是 signed raw_url，`--verify` 时会额外解析 `sha256sum.txt`。
 - 登录 cookie 约 24 小时过期，JWT 约 3 天；过期后发一次 `/firmware sync`（或 `/firmware login`）。
 - `sync` 约 40 秒、`login` 最长 180 秒，期间工具卡片保持 running。
 - 严格斜杠：追问、确认、粘 cookie 都必须带 `/firmware`，这是「只能 / 触发」的直接代价。

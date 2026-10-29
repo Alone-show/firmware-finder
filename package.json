@@ -1,11 +1,11 @@
 {
   "name": "@local/firmware-finder",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "用 /firmware 按机型/系统在 Teambition 发版看板的归档字段里定位量产固件",
+  "description": "用 /firmware 按机型/系统在 Teambition 发版看板的归档字段里定位量产固件；取不到时用 alist 产品目录兜底",
   "scripts": {
-    "test": "node gate-smoke.mjs && node model-resolve.test.mjs"
+    "test": "node gate-smoke.mjs && node model-resolve.test.mjs && node alist.test.mjs"
   },
   "exports": {
     ".": "./index.js",
@@ -14,6 +14,7 @@
   },
   "files": [
     "index.js",
+    "alist.js",
     "login.js",
     "cordis.patch.yml",
     "skill/SKILL.md",
