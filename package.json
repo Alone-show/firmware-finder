@@ -1,9 +1,9 @@
 {
   "name": "@local/firmware-finder",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "按机型/系统在 Teambition 发版看板的归档字段里定位量产固件",
+  "description": "用 /firmware 按机型/系统在 Teambition 发版看板的归档字段里定位量产固件",
   "exports": {
     ".": "./index.js",
     "./locale/*.json": "./locale/*.json",
@@ -13,6 +13,7 @@
     "index.js",
     "login.js",
     "cordis.patch.yml",
+    "skill/SKILL.md",
     "locale/*.json",
     "icon.svg",
     "tools/*",

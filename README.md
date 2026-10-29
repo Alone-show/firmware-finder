@@ -1,8 +1,18 @@
 # firmware-finder
 
-DeepSeek Harness 插件：按**机型 + 操作系统**，从 Teambition「【研发部】CI/CD 发版流程」看板的归档字段里定位量产固件，返回固件版本、构建日期、客户、以及 OSS 线刷/OTA 直链。
+DeepSeek Harness 插件：敲 `/firmware`，按**机型 + 操作系统**，从 Teambition「【研发部】CI/CD 发版流程」看板的归档字段里定位量产固件，给出固件版本、构建日期、客户，以及 OSS 线刷 / OTA 直链（对话里的链接可直接点击）。
 
-装上之后直接对话即可：「找 spring2pro 的安卓固件」。
+```text
+/firmware 帮我找 spring2pro 最新的固件
+/firmware spring2pro 安卓
+/firmware spring2 最近3个 -c SZ --verify
+/firmware models
+/firmware sync
+```
+
+**只能由 `/firmware` 触发**：`firmware_*` 工具由宿主侧闸门保护，只有最新一条用户消息里出现独立的 `/firmware` 词才允许执行；其他轮次（自然语言请求、追问、子代理会话）调用会被拒绝，并提示用户带 `/firmware` 重发。
+
+> 为什么不是宿主命令：0.2.2 曾用 `ctx.commands` 注册 `/cpfirmware`（不进模型、0 token），但 Web 客户端在「新建会话首屏」提交宿主命令不会跳转到新会话，命令执行了结果却不可见，因此整条回退。本版改为**技能式 `/firmware`**：斜杠消息原样进入正常对话轮次，宿主注入 skill 内容，结果走普通消息和工具卡片，不存在首屏失效问题；代价是每次查询消耗一轮模型调用。
 
 ## 安装
 
@@ -22,7 +32,42 @@ install_bundle target=/absolute/path/to/firmware-finder
 dsh plugin install /absolute/path/to/firmware-finder
 ```
 
-装完 `include:firmware-finder` 处于 enabled/active 即可用。
+装完 `include:firmware-finder` 处于 enabled/active 即可用；在输入框敲 `/` 能看到 `firmware`（只对用户可见，不会出现在模型的 skill 目录里）。
+
+## 用法
+
+```text
+/firmware <机型> [系统] [参数]           查固件
+/firmware models                         所有机型族与同族写法
+/firmware sync                           重拉看板索引（约 40 秒）
+/firmware login [window|auto|headless]   刷新登录凭据
+/firmware login <cookie 或 Copy as cURL> 手动粘凭据
+```
+
+机型支持自由写法：`spring2pro`、`SP2-10PRO`、`apollo 12 pro`、`瑞芯微 / APOLLO 12 PRO`、`T3 / SPRING2`。自然语言填充词（「帮我找」「最新的」「固件」「安卓」）会被识别。
+
+| 参数 | 说明 |
+|---|---|
+| `-c, --customer <CP\|SZ\|QX\|VR\|*>` | 客户；**缺省按 CP**，`所有客户` / `*` 不限 |
+| `-s, --system <android\|debian\|buildroot\|linux>` | 操作系统；`linux` 指 Debian + BuildRoot |
+| `--version <V1.08>` | 版本号片段 |
+| `--mainline <Android-11>` | 关联代码主线片段 |
+| `--stage <生产库归档>` | 阶段过滤 |
+| `-n, --limit <1-20>` | 显示条数，默认 5；说「最新」时为 1 |
+| `--verify` | HEAD 校验下载链接并显示体积（跳过内网 next/alist） |
+| `--all` | 包含没有固件链接的任务 |
+
+结果里会带上：
+
+- 「其他客户还有：QX(16)、YK(10)…」——默认 CP 之外的客户不会被悄悄吞掉；
+- 「存在比已归档版本更新的在制/测试版本」——避免把测试版本当成最新量产版本；
+- 索引新鲜度（超过 3 天会提示 `/firmware sync`）。
+
+### 斜杠规则（严格）
+
+- 只有**最新一条用户消息**里的独立 `/firmware` 词能开闸；`/firmwarex`、`/firmware-finder`、`用/firmware总结`、反引号里的 `` `/firmware` `` 都不算（与宿主识别手势的边界规则一致）。
+- 追问 / 机型确认轮也要重新带上 `/firmware`：机型有歧义时模型会列出候选，请你发 `/firmware SPRING2-10PRO 安卓` 这样的消息；登录需要手动粘 cookie 时发 `/firmware login <cookie>`。
+- 没有斜杠的轮次里模型不会自行检索；如果它误调工具，会被宿主拒绝并提示用户改用 `/firmware`。
 
 ## 首次使用需要两份数据
 
@@ -38,10 +83,10 @@ dsh plugin install /absolute/path/to/firmware-finder
 #    一般可以跳过：第 2 步的 firmware_sync 发现没有凭据时会自动弹窗登录
 ./tools/login.sh
 
-# 2) 在 Harness 里调用 firmware_sync 生成索引（约 40 秒，8600 条）
+# 2) 在 Harness 里发 /firmware sync 生成索引（约 40 秒，8600 条）
 ```
 
-## 四个工具
+## 四个工具（只能经 `/firmware` 使用）
 
 | 工具 | 作用 |
 |---|---|
@@ -49,6 +94,8 @@ dsh plugin install /absolute/path/to/firmware-finder
 | `firmware_models` | 列出所有机型族及其同族写法 |
 | `firmware_sync` | 从 Teambition 重拉看板索引；凭据缺失或过期时自动登录 |
 | `firmware_login` | 获取/刷新登录凭据：静默刷新 → 弹窗登录 → 手动粘贴 |
+
+工具本身仍然注册给模型（描述带「仅当用户输入 /firmware 时可用」前缀），但执行前有闸门；这是 DSH 目前能做到的「只认斜杠」强制点，也让模型在自然语言请求时能提示你改用 `/firmware`，而不是假装没有能力。
 
 未指定客户时**默认按 CP** 过滤，并在 `note` / `otherCustomers` 里列出其他客户；传 `customer: "*"` 表示不限。
 
@@ -70,7 +117,7 @@ dsh plugin install /absolute/path/to/firmware-finder
 
 Firefox / Safari 的远程调试协议不是 CDP，无法自动读取。这种情况下插件不会去驱动它，而是打开登录页并提示你手动复制：
 
-> F12 → Network → 任意请求右键「Copy as cURL」→ 把整段粘给 `firmware_login(cookie="...")`
+> F12 → Network → 任意请求右键「Copy as cURL」→ 把整段作为 `/firmware login <整段>` 发给 Harness（或调 `firmware_login(cookie="...")`）。
 
 也接受完整 cookie 串或单个 `TB_ACCESS_TOKEN`（后者通常会因缺少 `TEAMBITION_SESSIONID` 被服务端拒绝）。
 
@@ -94,6 +141,8 @@ Firefox / Safari 的远程调试协议不是 CDP，无法自动读取。这种�
 ## 关键实现说明
 
 - **零依赖**：本地安装是软链到仓库目录，Node 会按 realpath 解析，所以模块内不能 `import '@deepseek-ai/*'`。工具定义直接手写 JSON Schema 交给 `ctx.tools.register`。
+- **`/firmware` 入口**：`skill/SKILL.md`（frontmatter 里 `disable-model-invocation: true`）在 `apply()` 里用 `ctx.skills.register` 注册；注册表不读 frontmatter，插件自己解析后把 `invocation.modelInvocable=false / userInvocable=true` 传进去，所以模型目录看不到它，`/` 菜单看得到。
+- **闸门**：`ctx.on('tools/pre-execute')` 只放行最新一条 direct user 消息里含独立 `/firmware` 的轮次，其余返回 `{ kind: 'deny', reason: … }`。判定逻辑与离线测试在 `gate-smoke.mjs`（`node gate-smoke.mjs`）。
 - **显示环境**：宿主进程常常没有 `DISPLAY`/`WAYLAND_DISPLAY`（例如由服务启动），插件会显式补上同用户的 Wayland 套接字后再启动浏览器。
 - **数据目录**按顺序解析：`DSH_TBFW_DIR` / `DSH_FIRMWARE_DIR` → 会话工作目录（`workingDirectory.ensure(agent)`）→ 部署默认目录 → 进程 cwd，取第一个含 `board-*.json` 的。
 - **机型对齐**在插件里做：字母骨架 + 数字数量比较（`spring2pro` → `SPRING2-10PRO`），只有唯一强匹配才自动确定，否则返回 `needs_confirmation`。
@@ -103,19 +152,14 @@ Firefox / Safari 的远程调试协议不是 CDP，无法自动读取。这种�
 
 ## 改动后必须重载
 
-运行中的进程不会自动加载新代码。改完 `index.js` 后：
-
-```
-plugin_manager set_plugin include:firmware-finder enabled=false
-plugin_manager set_plugin include:firmware-finder enabled=true
-```
-
-否则要重启 Harness。
+运行中的进程不会自动加载新代码（profile 的 HMR 不监听 node_modules 里的插件模块）。改完 `index.js` / `skill/SKILL.md` 后**重启 `dsh web`**；仅用 `plugin_manager` 关开插件行不会让 ESM 缓存失效。
 
 ## 已知限制
 
 - `next.cpinnov.run` / `alist.cpinnov.run` 是内网分享页（`10.16.18.x`），外网不可达；实体文件在 `minio.cpuniverse.cn` / `mdmobs.cpuniverse.cn`。`--verify` 只校验后者。
-- 登录 cookie 约 24 小时过期，过期后重跑 `tools/login.sh`。
+- 登录 cookie 约 24 小时过期，JWT 约 3 天；过期后发一次 `/firmware sync`（或 `/firmware login`）。
+- `sync` 约 40 秒、`login` 最长 180 秒，期间工具卡片保持 running。
+- 严格斜杠：追问、确认、粘 cookie 都必须带 `/firmware`，这是「只能 / 触发」的直接代价。
 
 ## 许可
 

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "固件检索",
-    "description": "按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链。"
+    "description": "输入 /firmware 触发：按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链。"
   }
 }

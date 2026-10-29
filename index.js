@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { checkToken, ensureToken, loginWithCookie, discoverBrowsers, tokenFile } from './login.js';
 
 const PROJECT_ID = '65a8da81950780b816d12bd9'; // 【研发部】CI/CD 发版流程
+const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SKILL_FILE = path.join(PLUGIN_DIR, 'skill', 'SKILL.md');
 const UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0';
 
@@ -578,7 +581,7 @@ function findToolFor(ctx) {
   return {
     name: 'firmware_find',
     description:
-      '按机型和操作系统，在 Teambition「【研发部】CI/CD 发版流程」看板的归档字段里定位量产固件，返回固件版本、构建日期、客户、以及 OSS 线刷/OTA 直链。机型支持自由写法（如 apollo 12 pro、SP2-10PRO）。机型存在歧义时返回 status=needs_confirmation 和候选列表，必须先向用户确认再继续。未指定客户时默认按 CP 过滤，并在 note/otherCustomers 里列出其他客户，不要忽略这部分信息。',
+      '（仅当用户输入 /firmware 时可用）按机型和操作系统，在 Teambition「【研发部】CI/CD 发版流程」看板的归档字段里定位量产固件，返回固件版本、构建日期、客户、以及 OSS 线刷/OTA 直链。机型支持自由写法（如 apollo 12 pro、SP2-10PRO）。机型存在歧义时返回 status=needs_confirmation 和候选列表，必须先向用户确认再继续。未指定客户时默认按 CP 过滤，并在 note/otherCustomers 里列出其他客户，不要忽略这部分信息。',
     parameters: {
       type: 'object',
       properties: {
@@ -717,7 +720,7 @@ function modelsToolFor(ctx) {
   return {
     name: 'firmware_models',
     description:
-      '列出 Teambition 发版看板里出现过的所有机型族，含每个族的规范写法和同族别名、任务数。当 firmware_find 无法确定机型，或用户说法与看板不一致时使用。',
+      '（仅当用户输入 /firmware 时可用）列出 Teambition 发版看板里出现过的所有机型族，含每个族的规范写法和同族别名、任务数。当 firmware_find 无法确定机型，或用户说法与看板不一致时使用。',
     parameters: { type: 'object', properties: {} },
     output: {
       schema: {
@@ -757,7 +760,7 @@ function syncToolFor(ctx) {
   return {
     name: 'firmware_sync',
     description:
-      '从 Teambition 重新拉取「【研发部】CI/CD 发版流程」看板的全部任务和归档字段，重建本地索引（约 8600 个任务，耗时 40 秒左右）。索引过期或查不到新版本时使用。登录凭据缺失或即将过期时会自动处理：先尝试静默刷新，再弹出浏览器登录；失败时返回 needs_auth 并说明原因。',
+      '（仅当用户输入 /firmware 时可用）从 Teambition 重新拉取「【研发部】CI/CD 发版流程」看板的全部任务和归档字段，重建本地索引（约 8600 个任务，耗时 40 秒左右）。索引过期或查不到新版本时使用。登录凭据缺失或即将过期时会自动处理：先尝试静默刷新，再弹出浏览器登录；失败时返回 needs_auth 并说明原因。',
     parameters: { type: 'object', properties: {} },
     output: {
       schema: {
@@ -847,7 +850,7 @@ function loginToolFor(ctx) {
   return {
     name: 'firmware_login',
     description:
-      '获取或刷新 Teambition 登录凭据。默认自动：先用持久化的浏览器 profile 静默换发 token（用户无感），失败则弹出浏览器窗口让用户登录。也可以直接粘贴 cookie 或 DevTools 的「Copy as cURL」整段。凭据缺失、过期，或 firmware_sync 返回 needs_auth 时调用。',
+      '（仅当用户输入 /firmware 时可用）获取或刷新 Teambition 登录凭据。默认自动：先用持久化的浏览器 profile 静默换发 token（用户无感），失败则弹出浏览器窗口让用户登录。也可以直接粘贴 cookie 或 DevTools 的「Copy as cURL」整段。凭据缺失、过期，或 firmware_sync 返回 needs_auth 时调用。',
     parameters: {
       type: 'object',
       properties: {
@@ -914,12 +917,141 @@ function loginToolFor(ctx) {
 }
 
 
+/* ------------------------------------------------------------------ *
+ * /firmware：技能入口 + 工具闸门
+ * ------------------------------------------------------------------ */
+
+/**
+ * 读取并解析插件自带的 SKILL.md。
+ *
+ * 与 `@deepseek-ai/dsh-skill-filesystem` 的 frontmatter 语义保持一致：
+ * `disable-model-invocation` 关掉模型侧目录，`user-invocable` 关掉用户侧 `/` 菜单。
+ * 运行时注册（`ctx.skills.register`）不会自己读 frontmatter，所以这里解析后显式放进
+ * `invocation`，否则模型目录里会一直出现这个 skill。
+ */
+function readBundledSkill() {
+  const raw = fs.readFileSync(SKILL_FILE, 'utf8');
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/);
+  const frontmatter = match ? match[1] : '';
+  const field = (key) => {
+    const found = frontmatter.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+    return found ? found[1].trim() : '';
+  };
+  const flag = (key) => {
+    const found = frontmatter.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+    if (!found) return undefined;
+    const value = found[1].trim().toLowerCase();
+    if (value === 'true' || value === 'yes' || value === 'on' || value === '1') return true;
+    if (value === 'false' || value === 'no' || value === 'off' || value === '0') return false;
+    return undefined;
+  };
+  const skillName = field('name');
+  const description = field('description');
+  if (!skillName || !description) {
+    throw new Error(`${SKILL_FILE} 缺少 name/description frontmatter`);
+  }
+  return {
+    name: skillName,
+    description,
+    content: match ? raw.slice(match[0].length) : raw,
+    source: 'runtime',
+    path: SKILL_FILE,
+    resourceBase: { kind: 'directory', path: path.dirname(SKILL_FILE) },
+    invocation: {
+      modelInvocable: flag('disable-model-invocation') !== true,
+      userInvocable: flag('user-invocable') !== false,
+    },
+  };
+}
+
+/**
+ * 固件检索只允许由用户显式输入 /firmware 触发。
+ *
+ * skill 侧：SKILL.md 标注 disable-model-invocation，模型目录里看不到它，只能从 `/` 菜单
+ * 或手输 `/firmware` 进入；工具侧：下面的 tools/pre-execute 闸门兜底，防止模型绕过 skill
+ * 直接调 firmware_* 工具。
+ */
+const FIRMWARE_TOOL_NAMES = new Set([
+  'firmware_find',
+  'firmware_models',
+  'firmware_sync',
+  'firmware_login',
+]);
+/** 与 DSH 宿主识别用户 /firmware 手势的边界规则保持一致：前后需空白或行首行尾。 */
+const SLASH_FIRMWARE = /(^|\s)\/firmware(?=\s|$)/u;
+const SLASH_ONLY_REASON =
+  '固件检索只能由用户输入 /firmware 触发：不要自行调用 firmware_* 工具。' +
+  '需要查固件时，请让用户发送形如 `/firmware spring2pro 安卓`（机型 + 可选系统/参数）的消息。';
+
+function messageText(message) {
+  const blocks = message?.content;
+  if (!Array.isArray(blocks)) return '';
+  return blocks
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('\n');
+}
+
+/** 最近 limit 条可见的直接用户消息（新的在前）。 */
+function recentDirectUserMessages(session, limit) {
+  const messages = [];
+  const visible = new Set(session.surface?.nodes ?? []);
+  for (let index = session.seq - 1; index >= 0 && messages.length < limit; index -= 1) {
+    if (visible.size > 0 && !visible.has(index)) continue;
+    const event = session.eventAt(index);
+    if (event?.type !== 'user/message' || event.data?.source?.kind !== 'user') continue;
+    messages.push({ seq: index, text: messageText(event.data) });
+  }
+  return messages;
+}
+
+/**
+ * 本轮是否由 /firmware 触发：严格模式，只看最新一条直接用户消息。
+ * 追问 / 机型确认轮也必须重新带上 /firmware（由 skill 引导用户重发）。
+ */
+function slashInvocationOpen(agent) {
+  const session = agent?.session;
+  if (session === undefined || typeof session.eventAt !== 'function') return false;
+  const [latest] = recentDirectUserMessages(session, 1);
+  return latest !== undefined && SLASH_FIRMWARE.test(latest.text);
+}
+
 export const name = 'firmware-finder';
-export const inject = ['tools'];
+export const inject = ['tools', 'skills'];
 
 export function apply(ctx) {
   ctx.effect(() => ctx.tools.register(findToolFor(ctx)));
   ctx.effect(() => ctx.tools.register(modelsToolFor(ctx)));
   ctx.effect(() => ctx.tools.register(syncToolFor(ctx)));
   ctx.effect(() => ctx.tools.register(loginToolFor(ctx)));
+  ctx.effect(
+    () =>
+      ctx.on('tools/pre-execute', (exec, next) => {
+        if (!FIRMWARE_TOOL_NAMES.has(exec.name)) return next();
+        if (!slashInvocationOpen(exec.agent)) return { kind: 'deny', reason: SLASH_ONLY_REASON };
+        return next();
+      }),
+    'firmware-finder: /firmware-only gate',
+  );
+  try {
+    const skill = readBundledSkill();
+    ctx.effect(() => ctx.skills.register(skill));
+  } catch (error) {
+    const message = `[firmware-finder] 注册运行时 skill 失败：${error?.message || error}`;
+    if (ctx.logger?.warn) ctx.logger.warn(message);
+    else console.warn(message);
+  }
 }
+
+/** 供离线冒烟测试使用的内部函数（不参与运行时契约）。 */
+export const __internals = {
+  PLUGIN_DIR,
+  SKILL_FILE,
+  readBundledSkill,
+  FIRMWARE_TOOL_NAMES,
+  SLASH_FIRMWARE,
+  SLASH_ONLY_REASON,
+  messageText,
+  recentDirectUserMessages,
+  slashInvocationOpen,
+};
