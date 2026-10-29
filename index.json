@@ -21,8 +21,8 @@
         "zh": "固件检索"
       },
       "description": {
-        "en": "Type /firmware to find production firmware by device model and OS in the Teambition release board's archived fields, with flash and OTA links.",
-        "zh": "输入 /firmware 触发：按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链。"
+        "en": "Type /firmware to find production firmware by device model and OS in the Teambition release board's archived fields, including sub-model variants (e.g. APOLLO2-MIX / SP2-10MIX) parsed from archive link paths.",
+        "zh": "输入 /firmware 触发：按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链；含归档链接目录里的子型号变体（如 APOLLO2-MIX / SP2-10MIX）。"
       },
       "icon": "icon.svg",
       "author": "Alone-show",
@@ -40,6 +40,16 @@
         "labels": []
       },
       "versions": [
+        {
+          "version": "0.3.1",
+          "publishTimestamp": 1793245580,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Alone-show/firmware-finder",
+            "commit": "dc85d014293065e84a7440f2e72fa8ee01ead769"
+          },
+          "engines": {}
+        },
         {
           "version": "0.3.0",
           "publishTimestamp": 1793241880,
