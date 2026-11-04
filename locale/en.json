@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Firmware Finder",
-    "description": "Trigger with /firmware: locate production firmware for a device model in the Teambition release board's archived fields, with flash and OTA links."
+    "title": "Firmware & Issue Finder",
+    "description": "Trigger with /firmware: find production firmware and flash/OTA links by model, OS and customer; inspect Teambition version-task subtasks as solved/pending; check whether a bug landed in the customer release. Lazy per-model retrieval by default, no full sync required."
   }
 }

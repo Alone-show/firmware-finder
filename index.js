@@ -3,9 +3,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkToken, ensureToken, loginWithCookie, discoverBrowsers, tokenFile } from './login.js';
 import { createAlist, parseVersionDir, osNameByLetter } from './alist.js';
+import { fixToolDefinitions } from './lib/fix/tools.js';
+import { syncSubtasks, readSubtasks, renderIssues, buildIssueRows, isVersionTask } from './lib/issues.js';
+import { createTbClient, findLiveRecords } from './lib/tb-live.js';
 
 /** 可替换的 alist 客户端工厂（离线测试用；运行时就是 createAlist）。 */
 let alistFactory = createAlist;
+/** 可替换的 fetch（离线测试用；运行时就是全局 fetch）。 */
+let fetchImpl = (...args) => globalThis.fetch(...args);
 
 const PROJECT_ID = '65a8da81950780b816d12bd9'; // 【研发部】CI/CD 发版流程
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -259,6 +264,15 @@ function resolveModel(query, groups) {
   scored.sort((a, b) => b[0] - a[0] || a[1].name.localeCompare(b[1].name));
   const top = scored[0];
   if (top) {
+    // 同为 85 分但任务量差 3 倍以上时取量大的那个：`spring2pro` 会同时命中
+    // 「RK / SPRING2-10PRO」(111) 和少量重复建单的「瑞芯微 / SPRING 10 PRO 二代」(5)。
+    const strong = scored.filter(([sc]) => sc >= 85);
+    if (strong.length > 1) {
+      const byCount = [...strong].sort((a, b) => b[1].count - a[1].count || a[1].name.localeCompare(b[1].name));
+      if (byCount[0][1].count >= 3 * Math.max(1, byCount[1][1].count)) {
+        return { hit: byCount[0][1], hits: [byCount[0][1]], scored };
+      }
+    }
     // 只有同样强的竞争者（另一个精确/省略尺寸命中）才阻断；纯前缀不算
     const rivals = scored.slice(1).filter(([sc]) => sc >= 85);
     if (rivals.length === 0 && top[0] >= 95 && (!qv || top[1].vendor === qv)) {
@@ -484,7 +498,7 @@ async function fetchPaged(headers, baseUrl, pick, maxPages = 300) {
     const url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}pageSize=200${
       token ? `&pageToken=${encodeURIComponent(token)}` : ''
     }`;
-    const r = await fetch(url, { headers });
+    const r = await fetchImpl(url, { headers });
     if (r.status === 401) throw new Error('Teambition 登录态失效，需要重新抓取 cookie（tbfw/login.sh）');
     if (!r.ok) throw new Error(`${baseUrl} -> ${r.status}`);
     const j = await r.json();
@@ -515,7 +529,7 @@ function normalizeFields(cfs, defs) {
   return fields;
 }
 
-async function syncBoard(ctx, exec) {
+async function syncBoard(ctx, exec, options = {}) {
   const dirs = await candidateDirs(ctx, exec);
   const dir = dirs.find((d) => fs.existsSync(path.join(d, 'token.json'))) ?? dirs[0];
   const tokFile = path.join(dir, 'token.json');
@@ -543,7 +557,12 @@ async function syncBoard(ctx, exec) {
     url: `https://www.teambition.com/task/${t._id}`,
     stage: t.taskflowstatus?.name ?? null,
     updated: t.updated,
+    created: t.created ?? '',
+    accomplished: t.accomplished ?? '',
+    isDone: t.isDone === true,
     isArchived: t.isArchived,
+    executor: t.executor?.name ?? '',
+    subtaskCount: t.subtaskCount ?? { total: 0, done: 0 },
     fields: normalizeFields(t.customfields, defs),
   }));
 
@@ -551,10 +570,33 @@ async function syncBoard(ctx, exec) {
   const out = path.join(dir, BOARD_NAME);
   fs.writeFileSync(
     out,
-    JSON.stringify({ projectId: PROJECT_ID, syncedAt: new Date().toISOString(), fetched: items.length, items }),
+    JSON.stringify({
+      format: 2,
+      projectId: PROJECT_ID,
+      syncedAt: new Date().toISOString(),
+      fetched: items.length,
+      items,
+    }),
   );
   cache = { file: null, mtimeMs: 0, board: null };
-  return { file: out, tasks: items.length };
+
+  let subtasks = null;
+  if (options.issues !== false) {
+    try {
+      subtasks = await syncSubtasks({
+        dir,
+        projectId: PROJECT_ID,
+        tasks: items,
+        headers,
+        fetchImpl,
+        force: options.force === true,
+      });
+    } catch (error) {
+      subtasks = { ok: false, reason: error?.message || String(error) };
+    }
+  }
+
+  return { file: out, tasks: items.length, subtasks };
 }
 
 /* ------------------------------------------------------------------ *
@@ -809,13 +851,137 @@ function mergeAlistRows(tbRows, alistRows) {
   return out;
 }
 
+/* ------------------------------------------------------------------ *
+ * 无 TB 索引时的按型号懒加载（只扫 /PROD 匹配目录）
+ * ------------------------------------------------------------------ */
+
+async function alistModelGroups(ctx, exec, system) {
+  const dir = await tokenDir(ctx, exec);
+  const alist = alistFactory({ cacheFile: path.join(dir, 'alist-cache.json') });
+  const chips = await alist.list('/PROD');
+  if (!chips) return { ok: false, alist, groups: [] };
+  const wanted = wantedOsSegments(system);
+  const groups = new Map();
+  for (const chipDir of chips.filter((entry) => entry.isDir)) {
+    const chip = chipVendor(chipDir.name);
+    const osDirs = await alist.list(`/PROD/${chipDir.name}`);
+    if (!osDirs) continue;
+    for (const osDir of osDirs.filter((entry) => entry.isDir)) {
+      const osUpper = osDir.name.toUpperCase();
+      if (wanted && !wanted.some((value) => osUpper.includes(value))) continue;
+      const modelDirs = await alist.list(`/PROD/${chipDir.name}/${osDir.name}`);
+      if (!modelDirs) continue;
+      for (const modelDir of modelDirs.filter((entry) => entry.isDir)) {
+        const { vendor, core } = canonModel(modelDir.name);
+        if (!core) continue;
+        const key = `${vendor || chip}\u0000${core}`;
+        const group = groups.get(key) ?? {
+          vendor: vendor || chip,
+          core,
+          names: [],
+          seen: new Set(),
+          count: 0,
+          aliases: [],
+          variants: new Map(),
+          osList: new Set(),
+        };
+        if (!group.seen.has(modelDir.name)) {
+          group.seen.add(modelDir.name);
+          group.names.push(modelDir.name);
+        }
+        group.count += 1;
+        group.osList.add(osDir.name);
+        groups.set(key, group);
+      }
+    }
+  }
+  const out = [...groups.values()].map((group) => {
+    group.name = [...group.names].sort((a, b) => a.localeCompare(b))[0] ?? group.core;
+    group.aliases = group.names.filter((name) => name !== group.name);
+    delete group.seen;
+    return group;
+  });
+  return { ok: true, alist, groups: out };
+}
+
+/** 本地没有 board 索引时也能查：用 /PROD 的机型目录做解析，再只扫匹配目录 */
+async function searchFromAlist(ctx, exec, args) {
+  const query = String(args.model ?? '').trim();
+  const catalog = await alistModelGroups(ctx, exec, args.system);
+  if (!catalog.ok) {
+    return {
+      status: 'needs_setup',
+      query,
+      hint: 'alist 不可达；请检查网络或先 /firmware sync。',
+      rows: [],
+    };
+  }
+  const { hit, hits, scored, variant } = resolveModel(query, catalog.groups);
+  if (!hit) {
+    return {
+      status: 'needs_confirmation',
+      query,
+      note: '本地没有 TB 看板索引，已改用 alist /PROD 机型目录；机型无法唯一确定。',
+      hint: '候选来自 /PROD 机型目录；用户说法里的 MIX/PLUS/PRO/A 后缀可以直接作为变体重试。',
+      candidates: scored.slice(0, 8).map(([score, group]) => ({
+        model: group.name,
+        score,
+        tasks: group.count,
+        aliases: group.aliases,
+        variants: [],
+      })),
+      rows: [],
+    };
+  }
+
+  const families = variant ? [hit.name] : hits?.length ? hits.map((group) => group.name) : [hit.name];
+  const cores = variant
+    ? [variant.core]
+    : [...new Set(families.map((name) => canonModel(name).core))].filter(Boolean);
+  const requested = String(args.customer ?? '').trim();
+  const customerDefaulted = !requested;
+  const effective = customerDefaulted ? 'CP' : requested;
+  const unlimited = /^(all|\*|不限)$/i.test(effective);
+  const limit = Math.max(1, Math.min(20, Number(args.limit) || 5));
+
+  const collected = await collectAlistRows(catalog.alist, {
+    cores,
+    vendor: hit.vendor,
+    system: args.system,
+    customer: unlimited ? '' : effective,
+    version: args.version,
+    limit,
+    verify: Boolean(args.verify),
+  });
+  if (!collected.ok) {
+    return { status: 'empty', resolvedModel: hit.name, note: 'alist 产品目录不可达。', rows: [] };
+  }
+  const rows = collected.rows;
+  return {
+    status: rows.length ? 'ok' : 'empty',
+    resolvedModel: hit.name,
+    ...(variant ? { variant: variant.label } : {}),
+    aliases: hit.aliases ?? [],
+    matchedFamilies: families.length > 1 ? families : [],
+    customer: effective,
+    customerDefaulted,
+    otherCustomers: collected.otherCustomers ?? [],
+    total: rows.length,
+    rows,
+    note:
+      '本地没有 TB 看板索引，本次直接查 alist /PROD（只扫匹配的机型/客户/系统目录）。' +
+      '要 TB 阶段/任务链接/子任务状态请 /firmware sync。',
+    alist: { ok: true, rows: rows.length },
+  };
+}
+
 async function search(ctx, exec, args) {
   let board;
   try {
     board = await readBoard(ctx, exec);
   } catch (e) {
     if (/找不到看板索引/.test(e.message)) {
-      return { status: 'needs_setup', query: String(args.model ?? ''), hint: '先调用 firmware_sync 生成索引（会自动处理登录）', rows: [] };
+      return searchFromAlist(ctx, exec, args);
     }
     throw e;
   }
@@ -1042,6 +1208,365 @@ async function search(ctx, exec, args) {
 }
 
 /** 工具返回值要过 DSH 的无损 JSON 校验：undefined 属性会被整次拒绝，这里按 JSON 语义丢掉。 */
+/* ------------------------------------------------------------------ *
+ * TB 版本任务 / 子任务检索
+ * ------------------------------------------------------------------ */
+
+/** 本地 TB 子任务索引是否可用（board format 2 + subtasks 文件） */
+async function issueIndexState(ctx, exec) {
+  const dirs = await candidateDirs(ctx, exec);
+  const dir = dirs.find((d) => fs.existsSync(path.join(d, BOARD_NAME)));
+  if (!dir) return { ok: false, reason: 'no-board', dir: dirs[0] };
+  let board;
+  try {
+    board = await readBoard(ctx, exec);
+  } catch (error) {
+    return { ok: false, reason: 'no-board', dir, error: error?.message };
+  }
+  if (board?.format !== 2) return { ok: false, reason: 'old-board', dir, board };
+  const subtasks = readSubtasks(dir, PROJECT_ID);
+  if (!subtasks) return { ok: false, reason: 'no-subtasks', dir, board };
+  return { ok: true, dir, board, subtasks };
+}
+
+function ageHoursOf(iso) {
+  const ts = Date.parse(iso ?? '');
+  return Number.isFinite(ts) ? (Date.now() - ts) / 3_600_000 : null;
+}
+
+/** 本地索引检索：先按机型/系统/客户筛父版本任务，再挂子任务 */
+async function issuesFromIndex(ctx, exec, args) {
+  const state = await issueIndexState(ctx, exec);
+  if (!state.ok) {
+    return {
+      status: 'needs_sync',
+      hint:
+        state.reason === 'no-subtasks'
+          ? '本地看板有任务但没有子任务索引。先 /firmware sync（会同时抓子任务）。'
+          : '本地 TB 索引缺失或还是旧格式。先 /firmware sync；只想快速看结果可以不 sync，改用实时搜索。',
+      dataDir: state.dir,
+    };
+  }
+  const { board, subtasks } = state;
+  const model = String(args.model ?? '').trim();
+  const query = String(args.query ?? '').trim();
+  if (!model && !query) {
+    return { status: 'needs_model', hint: '请给机型（如 spring2pro），或给一个现象关键词。' };
+  }
+
+  let needles = null;
+  let resolvedModel = '';
+  let variant = null;
+  let candidates = [];
+  if (model) {
+    const groups = modelGroups(board);
+    const resolved = resolveModel(model, groups);
+    if (!resolved.hit) {
+      return {
+        status: 'needs_confirmation',
+        query: model,
+        note: '机型无法唯一确定，请让用户在候选里选一个，不要自行猜测',
+        candidates: resolved.scored.slice(0, 8).map(([score, group]) => ({
+          model: group.name,
+          score,
+          tasks: group.count,
+          aliases: group.aliases,
+          variants: variantList(group),
+        })),
+        rows: [],
+        resolvedModel: model,
+      };
+    }
+    resolvedModel = resolved.hit.name;
+    variant = resolved.variant ?? null;
+    const families = variant ? [resolved.hit.name] : resolved.hits?.length ? resolved.hits.map((g) => g.name) : [resolved.hit.name];
+    needles = variant ? [variant.core] : [...new Set(families.flatMap((name) => modelVariants(name)))];
+    candidates = resolved.scored ?? [];
+  }
+
+  let parents = board.items.filter((task) => isVersionTask(task));
+  if (needles) parents = parents.filter((task) => hitModel(task, needles));
+  if (args.system) parents = parents.filter((task) => hitSystem(task, args.system, args.mainline));
+  if (args.stage) parents = parents.filter((task) => String(task.stage ?? '').includes(String(args.stage)));
+
+  const pool = new Map();
+  for (const task of parents) {
+    for (const c of asList(task.fields?.['客户ID'])) {
+      const key = String(c);
+      pool.set(key, (pool.get(key) ?? 0) + 1);
+    }
+  }
+  const requested = String(args.customer ?? '').trim();
+  const customerDefaulted = !requested;
+  const effective = customerDefaulted ? 'CP' : requested;
+  const unlimited = /^(all|\*|不限)$/i.test(effective);
+  const otherCustomers = [...pool.entries()]
+    .filter(([c]) => !unlimited && !c.toUpperCase().includes(effective.toUpperCase()))
+    .map(([c, count]) => ({ customer: c, count }))
+    .sort((a, b) => b.count - a.count);
+  const selected = unlimited
+    ? parents
+    : parents.filter((task) =>
+        String(task.fields?.['客户ID'] ?? '')
+          .toUpperCase()
+          .includes(effective.toUpperCase()),
+      );
+
+  const records = [];
+  for (const parent of selected) {
+    for (const subtask of subtasks.byParent?.[parent.id] ?? []) records.push({ subtask, parent });
+  }
+
+  const result = buildIssueRows({
+    records,
+    customer: effective,
+    customerDefaulted,
+    otherCustomers,
+    status: args.status ?? 'all',
+    query,
+    limit: Math.max(1, Math.min(20, Number(args.limit) || 5)),
+    subtaskLimit: Math.max(1, Math.min(50, Number(args.subtaskLimit) || 30)),
+    syncedAt: subtasks.syncedAt,
+    ageHours: ageHoursOf(subtasks.syncedAt),
+    source: 'index',
+  });
+  result.resolvedModel = resolvedModel || model;
+  result.query = query;
+  result.system = args.system ?? '';
+  result.candidates = candidates;
+  result.notes = [
+    ...(result.notes ?? []),
+    `数据来自本地 TB 索引（${subtasks.syncedAt || '未知时间'}），要最新状态请 /firmware sync 或改用 source=live。`,
+  ];
+  return result;
+}
+
+function modelAliasQueries(model) {
+  const base = String(model ?? '').trim();
+  if (!base) return [];
+  return [...new Set(modelVariants(base))].filter((x) => x.length >= 3);
+}
+
+async function liveAuth(ctx, exec) {
+  const dir = await tokenDir(ctx, exec);
+  const state = checkToken(dir);
+  try {
+    const tok = JSON.parse(fs.readFileSync(path.join(dir, 'token.json'), 'utf8'));
+    const cookie = (tok.cookies ?? [])
+      .filter((c) => String(c.domain ?? '').includes('teambition'))
+      .map((c) => `${c.name}=${c.value}`)
+      .join('; ');
+    if (!cookie) return { ok: false, dir, state };
+    return { ok: true, dir, cookie, state };
+  } catch (error) {
+    return { ok: false, dir, state, error: error?.message };
+  }
+}
+
+/** 实时检索：不依赖全量索引，按型号/现象查 TB 搜索接口 */
+async function issuesFromLive(ctx, exec, args) {
+  const auth = await liveAuth(ctx, exec);
+  if (!auth.ok) {
+    return {
+      status: 'needs_auth',
+      hint: 'Teambition 登录态不可用，先 /firmware login；或 /firmware sync 建全量索引后离线查。',
+    };
+  }
+  const client = createTbClient({ cookie: auth.cookie, fetchImpl });
+  let found;
+  try {
+    found = await findLiveRecords({
+    client,
+    projectId: PROJECT_ID,
+    model: args.model ?? '',
+    query: args.query ?? '',
+    system: args.system ?? '',
+    customer: args.customer ?? 'CP',
+    pages: Math.max(1, Math.min(10, Number(args.pages) || 3)),
+    maxHits: 60,
+      maxParents: Math.max(1, Math.min(50, Number(args.limit) || 5) * 6),
+    });
+  } catch (error) {
+    if (/登录态失效|401|InvalidAccessToken/i.test(String(error?.message))) {
+      return { status: 'needs_auth', hint: 'Teambition 登录态失效，请 /firmware login；或先 /firmware sync 建全量索引。' };
+    }
+    throw error;
+  }
+  const result = buildIssueRows({
+    records: found.records,
+    customer: found.customer,
+    customerDefaulted: found.customerDefaulted,
+    otherCustomers: found.otherCustomers,
+    status: args.status ?? 'all',
+    query: args.query ?? '',
+    limit: Math.max(1, Math.min(20, Number(args.limit) || 5)),
+    subtaskLimit: Math.max(1, Math.min(50, Number(args.subtaskLimit) || 30)),
+    syncedAt: new Date().toISOString(),
+    ageHours: 0,
+    source: 'live',
+  });
+  result.resolvedModel = args.model ?? '';
+  result.query = args.query ?? '';
+  result.system = args.system ?? '';
+  result.searches = found.queries;
+  result.notes = [
+    ...(result.notes ?? []),
+    '实时搜索结果只覆盖 TB 搜索接口命中的任务（单页 10 条）；要完整历史/全量状态请 /firmware sync 后加 source=index。',
+  ];
+  return result;
+}
+
+function issuesToolFor(ctx) {
+  return {
+    name: 'firmware_issues',
+    description:
+      '（仅当用户输入 /firmware 时可用）查 TB「【研发部】CI/CD 发版流程」看板里当前/历史版本任务的子任务状态：按机型、系统、客户筛出与某现象相关的子任务，标注已解决/待解决/已拒绝/暂挂起，并挂回父版本任务与固件链接。默认走实时 TB 搜索（约 2–6 秒，不需要 sync），本地有全量索引时优先用索引；要完整历史/全量状态时传 source=index（需先 /firmware sync）。它是业务侧状态，不等于代码已修复；代码层结论用 firmware_fix_check。',
+    parameters: {
+      type: 'object',
+      properties: {
+        model: { type: 'string', description: '机型，如 spring2pro、SP2-10PRO、APOLLO2-7A；只给 query 时可以省略' },
+        system: { type: 'string', description: '操作系统：Android / Debian / BuildRoot；linux 表示 Debian+BuildRoot' },
+        customer: { type: 'string', description: '客户ID，默认 CP；传 * 表示不限客户' },
+        status: { type: 'string', enum: ['all', 'open', 'done', 'rejected'], description: '子任务状态过滤：all（默认）/open 待解决/done 已解决/rejected 已拒绝' },
+        query: { type: 'string', description: '现象关键词，如「摄像头断层」；只对子任务标题+备注做自然语言匹配' },
+        stage: { type: 'string', description: '父版本任务阶段过滤，如 生产库归档' },
+        limit: { type: 'integer', description: '返回几个版本，默认 5，最大 20' },
+        subtaskLimit: { type: 'integer', description: '每个版本最多返回多少子任务，默认 30' },
+        source: { type: 'string', enum: ['auto', 'live', 'index'], description: 'auto=有本地索引用索引，否则实时搜索（默认）；live=强制实时；index=只用本地全量索引（需 /firmware sync）' },
+        pages: { type: 'integer', description: '实时搜索翻页数，默认 3（每页 10 条），最大 10' },
+        full: { type: 'boolean', description: '等价 source=index：要全量历史时用' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['ok', 'empty', 'needs_confirmation', 'needs_model', 'needs_setup', 'needs_sync', 'needs_auth', 'error'] },
+          source: { type: 'string' },
+          resolvedModel: { type: 'string' },
+          query: { type: 'string' },
+          system: { type: 'string' },
+          customer: { type: 'string' },
+          customerDefaulted: { type: 'boolean' },
+          otherCustomers: { type: 'array', items: { type: 'object' } },
+          summary: { type: 'object' },
+          rows: { type: 'array', items: { type: 'object' } },
+          candidates: { type: 'array', items: { type: 'object' } },
+          lowConfidence: { type: 'array', items: { type: 'object' } },
+          searches: { type: 'array', items: { type: 'string' } },
+          notes: { type: 'array', items: { type: 'string' } },
+          syncedAt: { type: 'string' },
+          ageHours: { type: 'number' },
+          hint: { type: 'string' },
+          message: { type: 'string' },
+        },
+        required: ['status'],
+        additionalProperties: true,
+      },
+      render: (_args, value) => [{ type: 'text', text: renderIssues(value) }],
+    },
+    async execute(args, exec) {
+      try {
+        const source = String(args.source ?? 'auto').toLowerCase();
+        if (source === 'live') return jsonSafe(await issuesFromLive(ctx, exec, args));
+        if (source === 'index' || args.full) return jsonSafe(await issuesFromIndex(ctx, exec, args));
+        const state = await issueIndexState(ctx, exec);
+        if (state.ok) return jsonSafe(await issuesFromIndex(ctx, exec, args));
+        try {
+          return jsonSafe(await issuesFromLive(ctx, exec, args));
+        } catch (error) {
+          return {
+            status: 'needs_sync',
+            hint: `实时检索失败（${error?.message || error}）。可以先 /firmware sync 建全量索引，或 /firmware login。`,
+          };
+        }
+      } catch (err) {
+        return { status: 'error', message: err?.message || String(err) };
+      }
+    },
+  };
+}
+
+/** firmware_fix_check 的 TB 侧证据：本地索引优先，没有索引时实时搜 */
+async function buildTbEvidence(ctx, { args = {}, result = {}, exec } = {}) {
+  const model = result.resolvedModel || args.model || '';
+  const query = args.bug || args.ticket || '';
+  const customer = args.customer || 'CP';
+  const system = args.os || '';
+  let issues = null;
+  try {
+    const state = await issueIndexState(ctx, exec);
+    if (state.ok) {
+      const local = await issuesFromIndex(ctx, exec, {
+        model,
+        query,
+        customer,
+        system,
+        status: 'all',
+        limit: 5,
+        subtaskLimit: 6,
+        source: 'index',
+      });
+      if (local.status === 'ok' || local.status === 'empty') issues = local;
+    }
+  } catch {
+    /* 继续尝试实时 */
+  }
+  if (!issues) {
+    try {
+      const live = await issuesFromLive(ctx, exec, {
+        model,
+        query,
+        customer,
+        system,
+        status: 'all',
+        limit: 5,
+        subtaskLimit: 6,
+        pages: 3,
+      });
+      if (live.status === 'ok' || live.status === 'empty') issues = live;
+    } catch (error) {
+      return { ok: false, reason: error?.message || String(error) };
+    }
+  }
+  if (!issues) return { ok: false, reason: 'TB 索引缺失且实时检索不可用' };
+
+  const flat = [];
+  for (const row of issues.rows ?? []) {
+    for (const item of row.subtasks ?? []) {
+      flat.push({
+        content: item.content,
+        status: item.status,
+        isDone: item.isDone,
+        outcome: item.outcome,
+        version: row.version,
+        buildDate: row.buildDate,
+        stage: row.stage,
+        customer: row.customer,
+        task: item.url,
+        score: item.score,
+      });
+    }
+  }
+  const summary = issues.summary ?? { versions: 0, subtasks: 0, open: 0, done: 0, rejected: 0 };
+  const notes = [];
+  if (result.verdict === 'fixed_released' && (summary.open ?? 0) > 0) {
+    notes.push('代码日志显示已进入客户正式版，但 TB 仍有待解决子任务：确认是否同一问题，或 TB 记录未关闭。');
+  }
+  if ((result.verdict === 'not_found' || result.verdict === 'fixed_other_line_only') && (summary.done ?? 0) > 0) {
+    notes.push('TB 有已解决记录，但代码日志未在客户线命中：可能日志缺失/来自未公开分支，需研发复核。');
+  }
+  if ((summary.rejected ?? 0) > 0) notes.push('TB 里有已拒绝/不解决的记录，未计入已解决。');
+  return {
+    ok: true,
+    source: issues.source,
+    summary,
+    issues: flat.slice(0, 5),
+    notes,
+  };
+}
+
+
 function jsonSafe(value) {
   if (Array.isArray(value)) return value.map(jsonSafe);
   if (value && typeof value === 'object') {
@@ -1364,8 +1889,14 @@ function syncToolFor(ctx) {
   return {
     name: 'firmware_sync',
     description:
-      '（仅当用户输入 /firmware 时可用）从 Teambition 重新拉取「【研发部】CI/CD 发版流程」看板的全部任务和归档字段，重建本地索引（约 8600 个任务，耗时 40 秒左右）。索引过期或查不到新版本时使用。登录凭据缺失或即将过期时会自动处理：先尝试静默刷新，再弹出浏览器登录；失败时返回 needs_auth 并说明原因。',
-    parameters: { type: 'object', properties: {} },
+      '（仅当用户输入 /firmware 时可用）从 Teambition 重新拉取「【研发部】CI/CD 发版流程」看板的全部任务、归档字段和子任务，重建本地全量索引（约 8760 个任务 + 3260 个子任务，耗时 60–90 秒）。索引过期、要看完整历史或实时搜索不够用时使用。传 issues:false 只同步任务（约 40 秒）。登录凭据缺失或即将过期时会自动处理：先尝试静默刷新，再弹出浏览器登录；失败时返回 needs_auth 并说明原因。',
+    parameters: {
+      type: 'object',
+      properties: {
+        issues: { type: 'boolean', description: '是否同时抓子任务，默认 true；false 时只同步看板任务' },
+        force: { type: 'boolean', description: 'true 时忽略增量判断，强制重抓全部子任务' },
+      },
+    },
     output: {
       schema: {
         type: 'object',
@@ -1373,6 +1904,7 @@ function syncToolFor(ctx) {
           status: { type: 'string', enum: ['ok', 'needs_auth'] },
           file: { type: 'string' },
           tasks: { type: 'integer' },
+          subtasks: { type: 'object' },
           auth: { type: 'string' },
           tokenState: { type: 'string' },
           reason: { type: 'string' },
@@ -1396,14 +1928,15 @@ function syncToolFor(ctx) {
                   .join('\n'),
               },
             ]
-          : [{ type: 'text', text: `已同步 ${v.tasks} 个任务 -> ${v.file}（凭据: ${v.auth ?? 'cached'}）` }],
+          : [{ type: 'text', text: `已同步 ${v.tasks} 个任务${v.subtasks ? `、${v.subtasks.items ?? 0} 个子任务（抓取 ${v.subtasks.fetched ?? 0} / 跳过 ${v.subtasks.skipped ?? 0} / 失败 ${v.subtasks.failed ?? 0}）` : '（未同步子任务）'} -> ${v.file}（凭据: ${v.auth ?? 'cached'}）` }],
     },
-    async execute(_args, exec) {
+    async execute(args, exec) {
+      const options = { issues: args.issues !== false, force: args.force === true };
       const dir = await tokenDir(ctx, exec);
       const state = checkToken(dir);
       let auth = 'cached';
 
-      if (state.state !== 'valid') {
+      if (state.state === 'missing') {
         if (process.env.TBFW_AUTO_LOGIN === '0') {
           return jsonSafe({
             status: 'needs_auth',
@@ -1429,7 +1962,7 @@ function syncToolFor(ctx) {
       }
 
       try {
-        return jsonSafe({ status: 'ok', ...(await syncBoard(ctx, exec)), auth, tokenState: state.state });
+        return jsonSafe({ status: 'ok', ...(await syncBoard(ctx, exec, options)), auth, tokenState: state.state });
       } catch (e) {
         if (!/登录态失效|401/.test(String(e.message))) throw e;
         const login = await ensureToken(dir, { mode: 'auto' });
@@ -1443,7 +1976,7 @@ function syncToolFor(ctx) {
             hint: login.hint,
           });
         }
-        const res = await syncBoard(ctx, exec);
+        const res = await syncBoard(ctx, exec, options);
         return jsonSafe({ status: 'ok', ...res, auth: login.via ?? 'window', tokenState: 'rejected' });
       }
     },
@@ -1580,6 +2113,12 @@ const FIRMWARE_TOOL_NAMES = new Set([
   'firmware_models',
   'firmware_sync',
   'firmware_login',
+  'firmware_issues',
+  'firmware_fix_check',
+  'firmware_fix_models',
+  'firmware_fix_log',
+  'firmware_fix_matrix',
+  'firmware_fix_sync',
 ]);
 /** 与 DSH 宿主识别用户 /firmware 手势的边界规则保持一致：前后需空白或行首行尾。 */
 const SLASH_FIRMWARE = /(^|\s)\/firmware(?=\s|$)/u;
@@ -1628,6 +2167,10 @@ export function apply(ctx) {
   ctx.effect(() => ctx.tools.register(modelsToolFor(ctx)));
   ctx.effect(() => ctx.tools.register(syncToolFor(ctx)));
   ctx.effect(() => ctx.tools.register(loginToolFor(ctx)));
+  ctx.effect(() => ctx.tools.register(issuesToolFor(ctx)));
+  for (const definition of fixToolDefinitions(ctx, { tbEvidence: (input) => buildTbEvidence(ctx, input) })) {
+    ctx.effect(() => ctx.tools.register(definition));
+  }
   ctx.effect(
     () =>
       ctx.on('tools/pre-execute', (exec, next) => {
@@ -1678,7 +2221,21 @@ export const __internals = {
   collectAlistRows,
   mergeAlistRows,
   parseVersionDir,
+  alistModelGroups,
+  searchFromAlist,
+  issueIndexState,
+  issuesFromIndex,
+  issuesFromLive,
+  buildTbEvidence,
+  syncBoard,
+  syncSubtasks,
+  readSubtasks,
+  buildIssueRows,
+  isVersionTask,
   setAlistFactory: (factory) => {
     alistFactory = factory;
+  },
+  setFetch: (impl) => {
+    fetchImpl = impl;
   },
 };

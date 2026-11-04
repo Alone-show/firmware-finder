@@ -21,8 +21,8 @@
         "zh": "固件检索"
       },
       "description": {
-        "en": "Type /firmware to find production firmware by device model and OS in the Teambition release board archive fields, with alist product-directory fallback (e.g. CP Debian images that never reach Teambition), including sub-model variants (APOLLO2-MIX) and equivalent families (7≡7A, 12≡12A).",
-        "zh": "输入 /firmware 触发：按机型和系统，在 Teambition 发版看板的归档字段中定位量产固件，返回线刷与 OTA 直链；Teambition 没有链接时用 alist 产品目录兜底（如只发到 alist 的 CP Debian 整机包）。含归档链接目录里的子型号变体（如 APOLLO2-MIX）与等价族（7≡7A、12≡12A）。"
+        "en": "Type /firmware to find production firmware by model/OS/customer in the Teambition release board and alist /PROD, inspect Teambition version-task subtasks as solved/pending, and check whether a bug landed in the customer release via commit logs. Lazy per-model retrieval by default; full index on demand.",
+        "zh": "输入 /firmware 触发：按机型/系统/客户在 Teambition 发版看板和 alist /PROD 定位量产固件（线刷/OTA 直链）；查 TB 版本任务/子任务的已解决/待解决状态；用 commit-logs 判断 bug 是否修进客户正式版。默认按型号懒加载，需要全量历史时再 /firmware sync。"
       },
       "icon": "icon.svg",
       "author": "Alone-show",
@@ -35,11 +35,24 @@
           "firmware",
           "teambition",
           "android",
-          "release"
+          "release",
+          "issue",
+          "bug",
+          "commit-log"
         ],
         "labels": []
       },
       "versions": [
+        {
+          "version": "0.5.0",
+          "publishTimestamp": 1793773785,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Alone-show/firmware-finder",
+            "commit": "91dfdff70ef8681af2c4d0158bbb09da8f397af8"
+          },
+          "engines": {}
+        },
         {
           "version": "0.4.0",
           "publishTimestamp": 1793264400,

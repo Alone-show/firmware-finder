@@ -80,9 +80,20 @@ console.log('ok  只收集 direct user 消息');
 // --- 闸门与 skill 的静态契约 ---
 assert.deepEqual(
   [...FIRMWARE_TOOL_NAMES].sort(),
-  ['firmware_find', 'firmware_login', 'firmware_models', 'firmware_sync'],
+  [
+    'firmware_find',
+    'firmware_fix_check',
+    'firmware_fix_log',
+    'firmware_fix_matrix',
+    'firmware_fix_models',
+    'firmware_fix_sync',
+    'firmware_issues',
+    'firmware_login',
+    'firmware_models',
+    'firmware_sync',
+  ],
 );
-console.log('ok  闸门覆盖 4 个固件工具');
+console.log('ok  闸门覆盖 10 个固件工具');
 assert.equal(SLASH_FIRMWARE.test('/firmware'), true);
 assert.equal(SLASH_FIRMWARE.test('用/firmware'), false);
 assert.ok(SLASH_ONLY_REASON.includes('/firmware'));
@@ -95,7 +106,7 @@ assert.equal(skill.invocation.userInvocable, true, '`/` 菜单里应出现 firmw
 assert.equal(skill.source, 'runtime');
 assert.equal(skill.path, SKILL_FILE);
 assert.equal(skill.resourceBase.path, path.dirname(SKILL_FILE));
-assert.ok(skill.content.trimStart().startsWith('# 固件检索'), 'frontmatter 不应进入正文');
+assert.ok(skill.content.trimStart().startsWith('# 固件与问题检索'), 'frontmatter 不应进入正文');
 assert.ok(skill.content.includes('/firmware'), '正文必须说明触发方式');
 assert.ok(skill.description.includes('/firmware'), '描述要提示用户用 /firmware 触发');
 assert.ok(skill.description.length > 0);

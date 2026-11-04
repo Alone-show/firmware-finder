@@ -1,56 +1,80 @@
 ---
 name: firmware
-description: 用 /firmware 按机型和系统检索 Teambition 量产固件（线刷 / OTA 直链）。固件, firmware, 线刷, OTA, 量产版本, 发版, Teambition。
+description: 用 /firmware 查固件、TB 版本任务/子任务（待解决/已解决）、以及 bug 是否修进正式版。固件, firmware, 线刷, OTA, 量产版本, 发版, Teambition, 子任务, 问题, 已解决, 待解决, 修复。
 disable-model-invocation: true
 ---
 
-# 固件检索
+# 固件与问题检索
 
-本流程只能由用户显式输入 `/firmware` 启动。`firmware_*` 工具由宿主侧闸门保护：只有最新一条用户消息里出现独立的 `/firmware` 词才允许调用；没有它时调用一律被拒绝。不要绕过闸门，也不要在没有 `/firmware` 的轮次自行检索或猜测固件信息。
+本流程只能由用户显式输入 `/firmware` 启动。所有 `firmware_*` / `firmware_fix_*` 工具由宿主侧闸门保护：只有最新一条用户消息里出现独立的 `/firmware` 词才允许调用；没有它时调用一律被拒绝。不要绕过闸门，也不要在没有 `/firmware` 的轮次自行检索或猜测。
 
-## 参数
+## 三条能力线
 
-`/firmware` 之后的文字就是参数，自然语言写法也认：
+1. **固件**：`firmware_find` / `firmware_models` —— 按机型/系统/客户找量产固件和线刷、OTA 链接。
+2. **TB 版本任务/子任务**：`firmware_issues` —— 当前和历史版本任务下的子任务，标已解决 / 待解决 / 已拒绝 / 暂挂起，并挂回父版本任务。
+3. **修复判定**：`firmware_fix_check` / `firmware_fix_models` / `firmware_fix_log` / `firmware_fix_matrix` —— 在 alist `/PROD` 的 commit-logs 里判断 bug 是否修进客户正式版，并比对其它机型/系统/芯片。
+
+**TB 状态不等于代码已修复**：`firmware_issues` 给业务侧记录，`firmware_fix_check` 给代码证据（结论是「疑似」），两者分开写。
+
+## 参数与默认值
 
 - 机型：`spring2pro`、`SP2-10PRO`、`apollo 12 pro`、`瑞芯微 / APOLLO 12 PRO`、`T3 / SPRING2`。
-- 系统：安卓 / Android、Debian、BuildRoot、Linux（工具里写作 `Android` / `Debian` / `BuildRoot`）。
-- 客户：`-c` / `--customer CP|SZ|QX|VR|*`；缺省按 CP 过滤，`*` / 「所有客户」表示不限客户。
-- 其它：`--version <V1.08>`、`--mainline <Android-11>`、`--stage <阶段>`、`-n` / `--limit <1-20>`、`--verify`、`--all`、`--source auto|tb|alist`。
-- 用户说「最新的」时用 `limit: 1`；没说条数时用工具默认值。
+- 系统：安卓 / Android、Debian、BuildRoot、Linux（`linux` = Debian + BuildRoot）。
+- 客户：`-c` / `--customer CP|SZ|QX|VR|*`；**缺省 CP**，`*` / 「所有客户」不限。
+- 其它：`--version`、`--mainline`、`--stage`、`-n/--limit`、`--verify`、`--all`、`--source auto|live|index`。
+- 用户说「最新的」→ `limit: 1`；没说条数用默认值。
 
-## 子命令
+## 子命令路由
 
 | 输入 | 工具 |
 |---|---|
-| `/firmware models`、`/firmware models <机型>`、`/firmware 机型` | `firmware_models`（带机型时只返回相关族 + 变体） |
-| `/firmware sync`、`/firmware 同步` | `firmware_sync` |
-| `/firmware login [window\|auto\|headless\|<cookie 或 Copy as cURL>]`、`/firmware 登录` | `firmware_login` |
-| 其它（含只有 `/firmware` 没有参数） | `firmware_find`；没有机型时先问用户机型，并请用户下一条消息仍以 `/firmware` 开头 |
+| `/firmware <机型> [系统/参数]` | `firmware_find` |
+| `/firmware models ...` | `firmware_models` |
+| `/firmware 问题 <机型> [系统] [--status open/done/all] [关键词]` | `firmware_issues` |
+| `/firmware 修复 <bug 描述> [机型/客户/系统]` | `firmware_fix_check`（默认带 TB 证据） |
+| `/firmware 日志 ...` | `firmware_fix_log` |
+| `/firmware 矩阵 <hash/DO-xxxx/标题>` | `firmware_fix_matrix` |
+| `/firmware sync [tb|fix]` | `firmware_sync`（看板+子任务）/ `firmware_fix_sync`（commit 索引） |
+| `/firmware 登录` | `firmware_login` |
 
-## 少走弯路（控制往返次数）
+**默认是快速路径，不需要先 sync**：
 
-1. 机型写法拿不准、或带 `MIX / PLUS / PRO / A / MAX / 7A` 这类变体后缀时，**把 `firmware_find` 与 `firmware_models(model=原写法)` 放在同一轮并发调用**，不要串行试；`firmware_models` 会直接给出该族的变体（如 `APOLLO2-MIX`）。
-2. `fixfinder` / `fix_*` 是 bug 修复索引，**不是机型索引**：不要用它解析机型、也不要为了查机型去 `fix_sync`。
-3. `needs_confirmation` 之后**不要**对同一机型重复调用（核心字母数字相同，得分必然相同）；把候选和变体列表交给用户即可。
-4. 一次把参数带满：「最新的」→ `limit: 1`；要同时看归档与在制 → `limit: 3`；看全客户 → `customer: "*"`（不要先 CP 再 `*`）；要体积第一次就带 `verify: true`（`next`/`alist` 是内网，不会被校验）。
-5. `pending` 字段已经覆盖「比归档更新」的在制/测试版本；Teambition 取不到时工具会**自动用 alist 兜底**，不需要你手工拼 alist 路径，也不要绕过工具去 alist/OSS 探查；只有用户明确问「构建产物是否已上传」时才做额外校验。
+- 本地有 TB 全量索引（`board` format 2 + `subtasks`）时，`firmware_issues` 直接查本地（毫秒级）。
+- 本地没有索引，或用户要「最新/刚提的」→ 走实时 TB 搜索（约 2–6 秒），只抓命中任务的子任务。
+- 用户明确要「全量/历史所有/完整状态」→ 传 `source: "index"` 或 `full: true`；没有全量索引时先 `/firmware sync`（约 60–90 秒）。
+- `firmware_find` 在没有 TB 看板索引时会自动只扫 alist `/PROD` 匹配目录（按型号/系统/客户，约 1 秒），不会要求先 sync。
+
+## 少走弯路
+
+1. 机型写法拿不准时，把主工具与对应 models 工具同轮并发：TB 看板用 `firmware_models`，alist 产品线用 `firmware_fix_models`，不要混用。
+2. 「这个问题解决没有 / TB 上有没有记录」→ 先 `firmware_issues`；需要代码层结论时同轮并发 `firmware_fix_check`，回答里分开写「TB 业务状态」和「代码证据」。
+3. 「修没修 / 进了哪个正式版 / 其它机型有没有」→ `firmware_fix_check`；不要只凭 TB 的 `isDone` 说已修复。
+4. 一次把参数带满：「最新的」→ `limit: 1`；看全客户 → `customer: "*"`；要体积第一次就带 `verify: true`。
+5. `firmware_issues` 默认 CP；`otherCustomers` 里的客户必须列出来，不要悄悄吞掉。
+6. 不要用 bash 直接读 `.tbfw` / `.fixfinder` / `token.json`，也不要手工拼 alist 路径；一律走工具。
 
 ## 流程
 
-1. 索引缺失或过期（超过 3 天）时先 `firmware_sync`（约 40 秒，凭据缺失会弹浏览器，最长约 180 秒）；用户的 `/firmware` 请求只是查询时可先直接 `firmware_find`，只有返回提示索引过期/缺失才补 `sync`。
-2. 调用 `firmware_find`，按 `status` 处理：
-   - `ok`：用 markdown 表格或列表给出版本、构建日期、客户，以及线刷 / OTA 直链，链接写成 `[名称](url)` 便于点击；同时转述 `note`、`otherCustomers`（其它客户）、`pending`（比已归档更新的在制/测试版本）里的信息，不要丢。返回 `variant` 时说明结果来自该变体（如「变体 APOLLO2-MIX」），因为同一族里还有别的子型号；返回 `matchedFamilies` 时说明命中了同族等价写法（如 `APOLLO2-7` ≡ `APOLLO2-7A`），提醒刷写前确认硬件。
-   - 行里带 `source: "alist"` / `"both"` 时，说明该版本来自 alist 产品目录（Teambition 归档字段没有链接），并把 `alist.size` / `artifacts` / `sha256` 一并转述；`alist.ok=false` 时说明兜底数据源不可达。
-   - alist 行的客户规则与 Teambition 完全一致：默认 CP，`otherCustomers` 里的其它客户必须列出（YM / SmartAG / LPX / LACOS 等），不要诱导跨客户混刷。
-   - `needs_confirmation`：把候选机型（含 `variants` 变体）列出来，请用户确认并用 `/firmware <规范机型> [系统] [参数]` 重发；不要替用户猜，也不要在同一轮重复调用。
-   - `needs_auth`：按提示调用 `firmware_login`；自动登录失败时，请用户把 cookie 或 DevTools 的「Copy as cURL」以 `/firmware login <cookie>` 的形式发来。
-   - 其它状态/错误：原样说明原因，并给出下一步（`/firmware sync`、`/firmware models`、`/firmware login`）。
-3. 如果工具返回「只能由 /firmware 触发」的拒绝：不要重试、不要换工具绕开，直接请用户带 `/firmware` 重发，例如 `/firmware spring2pro 安卓`。
-4. 客户字段必须保留：同一机型不同客户的固件不能混刷；默认 CP，但不要把 `otherCustomers` 省略掉。
-5. 不要用 bash 直接读数据目录里的 `board-*.json` / `token.json`，也不要直接调 `tools/login.sh`；一律走 `firmware_*` 工具。
+1. 查询类请求直接调工具，不必先 sync；只有工具返回 `needs_sync` / 索引过期（board >3 天、fix >24h）时才补 sync。
+2. `firmware_find`：
+   - `ok`：用表格/列表给版本、构建日期、客户、线刷/OTA 链接；转述 `note`、`otherCustomers`、`pending`。
+   - `source: alist`：说明来自 alist `/PROD`，Teambition 没有归档链接。
+   - `needs_confirmation`：列候选（含 variants），请用户用 `/firmware <规范机型>` 重发；不要猜。
+3. `firmware_issues`：
+   - `ok`：按版本分组，给已解决/待解决计数和每条子任务的状态、日期、执行人；`query` 命中时给分数/命中词。
+   - `empty` 且有 `lowConfidence`：把低置信候选列出来，请用户换更具体的现象词。
+   - `needs_confirmation`：列候选机型，请用户确认。
+   - `needs_auth`：提示 `/firmware login`。
+   - `needs_sync`：说明「要全量索引」再 `/firmware sync`；日常查询可改用 `source: "live"`。
+4. `firmware_fix_check`：
+   - 结论是「疑似」，依据候选提交与客户正式版；把 `tb` 里的 TB 子任务证据一并转述。
+   - 代码/TB 不一致时按 `tb.notes` 提示（代码已发版但 TB 未关闭，或 TB 已解决但日志未命中）。
+5. 工具返回「只能由 /firmware 触发」时，不要重试、不要绕开，请用户带 `/firmware` 重发。
 
 ## 输出
 
-- 直接给结论：机型、系统、版本、构建日期、客户、线刷/OTA 链接；有 `variant` / `matchedFamilies` 时一并写出，并标注数据源（Teambition 还是 alist）。
-- 索引时间超过 3 天就提示用户 `/firmware sync`。
-- 不确定机型时给候选，不要编造版本号或链接。
+- 固件：机型、系统、版本、构建日期、客户、线刷/OTA 链接；标注数据源（Teambition / alist）。
+- 问题：版本任务、阶段、构建日期、子任务状态（已解决/待解决/已拒绝/暂挂起）、完成日期、执行人；明确这是 TB 业务记录。
+- 修复：verdict、依据提交、客户正式版版本；注明「疑似，需研发复核」，并附 TB 证据。
+- 索引时间超过 3 天（TB）或 24 小时（fix）时提示 `/firmware sync`。
+- 不确定机型时给候选，不要编造版本号、链接或状态。

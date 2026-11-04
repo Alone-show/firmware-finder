@@ -44,7 +44,7 @@ function httpsPost({ url, body, timeoutMs }) {
           headers: {
             'content-type': 'application/json',
             'content-length': Buffer.byteLength(payload),
-            'user-agent': 'firmware-finder/0.4.0',
+            'user-agent': 'firmware-finder/0.5.0',
           },
           timeout: timeoutMs,
           // 必须绕开全局 Agent：DSH 进程里 https.globalAgent 被代理接管
@@ -103,7 +103,7 @@ function httpsGetText({ url, timeoutMs }) {
           port: parsed.port || 443,
           path: `${parsed.pathname}${parsed.search}`,
           method: 'GET',
-          headers: { 'user-agent': 'firmware-finder/0.4.0' },
+          headers: { 'user-agent': 'firmware-finder/0.5.0' },
           timeout: timeoutMs,
           agent: false,
         },
