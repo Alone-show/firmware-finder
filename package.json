@@ -1,9 +1,9 @@
 {
   "name": "@local/firmware-finder",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
-  "description": "用 /firmware 查固件、TB 版本任务/子任务（待解决/已解决）、以及 bug 是否修进正式版；/PROD 按型号懒加载",
+  "description": "用自然语言或 /firmware 查固件、TB 版本任务/子任务（待解决/已解决）、以及 bug 是否修进正式版；/PROD 按型号懒加载",
   "scripts": {
     "test": "node gate-smoke.mjs && node model-resolve.test.mjs && node alist.test.mjs && node --test test/*.test.mjs"
   },

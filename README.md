@@ -14,7 +14,7 @@ DeepSeek Harness 插件：一个 `/firmware` 入口，覆盖三件事：
 /firmware sync
 ```
 
-**只能由 `/firmware` 触发**：`firmware_*` 与 `firmware_fix_*` 工具由宿主侧闸门保护，只有最新一条用户消息里出现独立的 `/firmware` 词才允许执行。
+**触发方式**：可以直接用自然语言问（「spring2pro 最新固件」「这个摄像头问题解决了吗」），也可以输入 `/firmware ...` 作为显式入口。0.5.1 起取消了 `/firmware` 强约束，不再有宿主侧闸门。
 
 ## 快速路径：按型号懒加载，不用先 sync
 
@@ -173,7 +173,7 @@ dsh plugin --profile web remove @local/fix-finder
 npm test
 ```
 
-离线跑：闸门、机型解析、alist 客户端、fix 原有 62 个用例、子任务索引/检索用例。不需要 TB/alist 网络。
+离线跑：skill/工具注册、机型解析、alist 客户端、fix 原有 62 个用例、子任务索引/检索用例。不需要 TB/alist 网络。
 
 ## 已知限制
 

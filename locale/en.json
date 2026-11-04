@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Firmware & Issue Finder",
-    "description": "Trigger with /firmware: find production firmware and flash/OTA links by model, OS and customer; inspect Teambition version-task subtasks as solved/pending; check whether a bug landed in the customer release. Lazy per-model retrieval by default, no full sync required."
+    "description": "Ask in natural language or type /firmware to find production firmware and flash/OTA links by model, OS and customer; inspect Teambition version-task subtasks as solved/pending; check whether a bug landed in the customer release. Lazy per-model retrieval by default."
   }
 }

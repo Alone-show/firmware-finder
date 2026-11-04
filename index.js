@@ -1420,7 +1420,7 @@ function issuesToolFor(ctx) {
   return {
     name: 'firmware_issues',
     description:
-      '（仅当用户输入 /firmware 时可用）查 TB「【研发部】CI/CD 发版流程」看板里当前/历史版本任务的子任务状态：按机型、系统、客户筛出与某现象相关的子任务，标注已解决/待解决/已拒绝/暂挂起，并挂回父版本任务与固件链接。默认走实时 TB 搜索（约 2–6 秒，不需要 sync），本地有全量索引时优先用索引；要完整历史/全量状态时传 source=index（需先 /firmware sync）。它是业务侧状态，不等于代码已修复；代码层结论用 firmware_fix_check。',
+      '查 TB「【研发部】CI/CD 发版流程」看板里当前/历史版本任务的子任务状态：按机型、系统、客户筛出与某现象相关的子任务，标注已解决/待解决/已拒绝/暂挂起，并挂回父版本任务与固件链接。默认走实时 TB 搜索（约 2–6 秒，不需要 sync），本地有全量索引时优先用索引；要完整历史/全量状态时传 source=index（需先 /firmware sync）。它是业务侧状态，不等于代码已修复；代码层结论用 firmware_fix_check。',
     parameters: {
       type: 'object',
       properties: {
@@ -1596,7 +1596,7 @@ function findToolFor(ctx) {
   return {
     name: 'firmware_find',
     description:
-      '（仅当用户输入 /firmware 时可用）按机型和操作系统，在 Teambition「【研发部】CI/CD 发版流程」看板的归档字段里定位量产固件，返回固件版本、构建日期、客户、以及 OSS 线刷/OTA 直链。Teambition 没有归档链接时（如 CP 的 Debian 整机包只发到 alist），自动以 alist 产品目录兜底，并在结果里标注 source=alist。机型支持自由写法（如 apollo 12 pro、SP2-10PRO），7/7A、12/12A 等价写法会合并命中。机型存在歧义时返回 status=needs_confirmation 和候选列表，必须先向用户确认再继续。未指定客户时默认按 CP 过滤，并在 note/otherCustomers 里列出其他客户，不要忽略这部分信息。',
+      '按机型和操作系统，在 Teambition「【研发部】CI/CD 发版流程」看板的归档字段里定位量产固件，返回固件版本、构建日期、客户、以及 OSS 线刷/OTA 直链。Teambition 没有归档链接时（如 CP 的 Debian 整机包只发到 alist），自动以 alist 产品目录兜底，并在结果里标注 source=alist。机型支持自由写法（如 apollo 12 pro、SP2-10PRO），7/7A、12/12A 等价写法会合并命中。机型存在歧义时返回 status=needs_confirmation 和候选列表，必须先向用户确认再继续。未指定客户时默认按 CP 过滤，并在 note/otherCustomers 里列出其他客户，不要忽略这部分信息。',
     parameters: {
       type: 'object',
       properties: {
@@ -1779,7 +1779,7 @@ function modelsToolFor(ctx) {
   return {
     name: 'firmware_models',
     description:
-      '（仅当用户输入 /firmware 时可用）列出 Teambition 发版看板里出现过的机型族，含规范写法、同族别名（含归档链接目录里的缩写写法，如 SP2-10MIX）、变体（如 APOLLO2-MIX）和任务数。传 model 时只返回匹配的族。传 alist=true 时附带 alist 产品目录里的机型目录概览（兜底数据源，如 CP 的 Debian 只在 alist）。机型写法不确定时先查这里，不要用其它插件的数据源。',
+      '列出 Teambition 发版看板里出现过的机型族，含规范写法、同族别名（含归档链接目录里的缩写写法，如 SP2-10MIX）、变体（如 APOLLO2-MIX）和任务数。传 model 时只返回匹配的族。传 alist=true 时附带 alist 产品目录里的机型目录概览（兜底数据源，如 CP 的 Debian 只在 alist）。机型写法不确定时先查这里，不要用其它插件的数据源。',
     parameters: {
       type: 'object',
       properties: {
@@ -1889,7 +1889,7 @@ function syncToolFor(ctx) {
   return {
     name: 'firmware_sync',
     description:
-      '（仅当用户输入 /firmware 时可用）从 Teambition 重新拉取「【研发部】CI/CD 发版流程」看板的全部任务、归档字段和子任务，重建本地全量索引（约 8760 个任务 + 3260 个子任务，耗时 60–90 秒）。索引过期、要看完整历史或实时搜索不够用时使用。传 issues:false 只同步任务（约 40 秒）。登录凭据缺失或即将过期时会自动处理：先尝试静默刷新，再弹出浏览器登录；失败时返回 needs_auth 并说明原因。',
+      '从 Teambition 重新拉取「【研发部】CI/CD 发版流程」看板的全部任务、归档字段和子任务，重建本地全量索引（约 8760 个任务 + 3260 个子任务，耗时 60–90 秒）。索引过期、要看完整历史或实时搜索不够用时使用。传 issues:false 只同步任务（约 40 秒）。登录凭据缺失或即将过期时会自动处理：先尝试静默刷新，再弹出浏览器登录；失败时返回 needs_auth 并说明原因。',
     parameters: {
       type: 'object',
       properties: {
@@ -1987,7 +1987,7 @@ function loginToolFor(ctx) {
   return {
     name: 'firmware_login',
     description:
-      '（仅当用户输入 /firmware 时可用）获取或刷新 Teambition 登录凭据。默认自动：先用持久化的浏览器 profile 静默换发 token（用户无感），失败则弹出浏览器窗口让用户登录。也可以直接粘贴 cookie 或 DevTools 的「Copy as cURL」整段。凭据缺失、过期，或 firmware_sync 返回 needs_auth 时调用。',
+      '获取或刷新 Teambition 登录凭据。默认自动：先用持久化的浏览器 profile 静默换发 token（用户无感），失败则弹出浏览器窗口让用户登录。也可以直接粘贴 cookie 或 DevTools 的「Copy as cURL」整段。凭据缺失、过期，或 firmware_sync 返回 needs_auth 时调用。',
     parameters: {
       type: 'object',
       properties: {
@@ -2055,7 +2055,7 @@ function loginToolFor(ctx) {
 
 
 /* ------------------------------------------------------------------ *
- * /firmware：技能入口 + 工具闸门
+ * /firmware：技能入口（自然语言同样可调用，不再有强约束）
  * ------------------------------------------------------------------ */
 
 /**
@@ -2101,64 +2101,6 @@ function readBundledSkill() {
   };
 }
 
-/**
- * 固件检索只允许由用户显式输入 /firmware 触发。
- *
- * skill 侧：SKILL.md 标注 disable-model-invocation，模型目录里看不到它，只能从 `/` 菜单
- * 或手输 `/firmware` 进入；工具侧：下面的 tools/pre-execute 闸门兜底，防止模型绕过 skill
- * 直接调 firmware_* 工具。
- */
-const FIRMWARE_TOOL_NAMES = new Set([
-  'firmware_find',
-  'firmware_models',
-  'firmware_sync',
-  'firmware_login',
-  'firmware_issues',
-  'firmware_fix_check',
-  'firmware_fix_models',
-  'firmware_fix_log',
-  'firmware_fix_matrix',
-  'firmware_fix_sync',
-]);
-/** 与 DSH 宿主识别用户 /firmware 手势的边界规则保持一致：前后需空白或行首行尾。 */
-const SLASH_FIRMWARE = /(^|\s)\/firmware(?=\s|$)/u;
-const SLASH_ONLY_REASON =
-  '固件检索只能由用户输入 /firmware 触发：不要自行调用 firmware_* 工具。' +
-  '需要查固件时，请让用户发送形如 `/firmware spring2pro 安卓`（机型 + 可选系统/参数）的消息。';
-
-function messageText(message) {
-  const blocks = message?.content;
-  if (!Array.isArray(blocks)) return '';
-  return blocks
-    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text)
-    .join('\n');
-}
-
-/** 最近 limit 条可见的直接用户消息（新的在前）。 */
-function recentDirectUserMessages(session, limit) {
-  const messages = [];
-  const visible = new Set(session.surface?.nodes ?? []);
-  for (let index = session.seq - 1; index >= 0 && messages.length < limit; index -= 1) {
-    if (visible.size > 0 && !visible.has(index)) continue;
-    const event = session.eventAt(index);
-    if (event?.type !== 'user/message' || event.data?.source?.kind !== 'user') continue;
-    messages.push({ seq: index, text: messageText(event.data) });
-  }
-  return messages;
-}
-
-/**
- * 本轮是否由 /firmware 触发：严格模式，只看最新一条直接用户消息。
- * 追问 / 机型确认轮也必须重新带上 /firmware（由 skill 引导用户重发）。
- */
-function slashInvocationOpen(agent) {
-  const session = agent?.session;
-  if (session === undefined || typeof session.eventAt !== 'function') return false;
-  const [latest] = recentDirectUserMessages(session, 1);
-  return latest !== undefined && SLASH_FIRMWARE.test(latest.text);
-}
-
 export const name = 'firmware-finder';
 export const inject = ['tools', 'skills'];
 
@@ -2171,15 +2113,6 @@ export function apply(ctx) {
   for (const definition of fixToolDefinitions(ctx, { tbEvidence: (input) => buildTbEvidence(ctx, input) })) {
     ctx.effect(() => ctx.tools.register(definition));
   }
-  ctx.effect(
-    () =>
-      ctx.on('tools/pre-execute', (exec, next) => {
-        if (!FIRMWARE_TOOL_NAMES.has(exec.name)) return next();
-        if (!slashInvocationOpen(exec.agent)) return { kind: 'deny', reason: SLASH_ONLY_REASON };
-        return next();
-      }),
-    'firmware-finder: /firmware-only gate',
-  );
   try {
     const skill = readBundledSkill();
     ctx.effect(() => ctx.skills.register(skill));
@@ -2195,12 +2128,6 @@ export const __internals = {
   PLUGIN_DIR,
   SKILL_FILE,
   readBundledSkill,
-  FIRMWARE_TOOL_NAMES,
-  SLASH_FIRMWARE,
-  SLASH_ONLY_REASON,
-  messageText,
-  recentDirectUserMessages,
-  slashInvocationOpen,
   canonModel,
   equivCore,
   queryCores,
