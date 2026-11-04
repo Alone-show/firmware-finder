@@ -21,8 +21,8 @@
         "zh": "固件检索"
       },
       "description": {
-        "en": "Type /firmware to find production firmware by model/OS/customer in the Teambition release board and alist /PROD, inspect Teambition version-task subtasks as solved/pending, and check whether a bug landed in the customer release via commit logs. Lazy per-model retrieval by default; full index on demand.",
-        "zh": "输入 /firmware 触发：按机型/系统/客户在 Teambition 发版看板和 alist /PROD 定位量产固件（线刷/OTA 直链）；查 TB 版本任务/子任务的已解决/待解决状态；用 commit-logs 判断 bug 是否修进客户正式版。默认按型号懒加载，需要全量历史时再 /firmware sync。"
+        "en": "Ask in natural language or type /firmware to find production firmware, inspect Teambition version-task subtasks as solved/pending, and check bug fixes via commit logs. Lazy per-model retrieval by default.",
+        "zh": "用自然语言或 /firmware 查量产固件、TB 版本任务/子任务的已解决/待解决状态，并用 commit-logs 判断 bug 是否修进客户正式版。默认按型号懒加载，需要全量历史时再同步。"
       },
       "icon": "icon.svg",
       "author": "Alone-show",
@@ -43,6 +43,16 @@
         "labels": []
       },
       "versions": [
+        {
+          "version": "0.5.1",
+          "publishTimestamp": 1793775558,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Alone-show/firmware-finder",
+            "commit": "56ae7641e6070c02fea08606229a4fb1f01d394f"
+          },
+          "engines": {}
+        },
         {
           "version": "0.5.0",
           "publishTimestamp": 1793773785,
